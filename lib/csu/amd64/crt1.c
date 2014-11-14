@@ -74,6 +74,12 @@ _start(char **ap, void (*cleanup)(void))
 __asm__("eprol:");
 #endif
 
+        /* Initialize the unsafe stack, and store its pointer into the tcb. */
+        void *unsafestack = init_unsafestack();
+        __asm __volatile("movq %0, %%fs:0x18"
+                         :: "r" (unsafestack));
+
 	handle_static_init(argc, argv, env);
+
 	exit(main(argc, argv, env));
 }
