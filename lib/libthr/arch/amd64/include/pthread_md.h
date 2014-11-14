@@ -36,6 +36,7 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include <machine/sysarch.h>
+#include <assert.h>
 
 #define	CPU_SPINWAIT		__asm __volatile("pause")
 
@@ -49,7 +50,7 @@ struct tcb {
 	struct tcb		*tcb_self;	/* required by rtld */
 	void			*tcb_dtv;	/* required by rtld */
 	struct pthread		*tcb_thread;
-	void			*tcb_spare[1];
+	void			*tcb_unsafestack; /* unsafe stack ptr */
 };
 
 /*
@@ -96,5 +97,8 @@ _get_curthread(void)
 }
 
 #define	HAS__UMTX_OP_ERR	1
+
+/* extra check for unsafe stack entry offset */
+_Static_assert(__tcb_offset(tcb_unsafestack) == 0x18, "unsafestack TCB ABI break");
 
 #endif

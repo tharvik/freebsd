@@ -31,6 +31,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ucontext.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef void (*func_t)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
     uint64_t);
@@ -92,6 +93,9 @@ __makecontext(ucontext_t *ucp, void (*start)(void), int argc, ...)
 	ucp->uc_mcontext.mc_rbx = (register_t)sp;
 	ucp->uc_mcontext.mc_rsp = (register_t)sp;
 	ucp->uc_mcontext.mc_rip = (register_t)makectx_wrapper;
+
+	/* Clear the spare field for safestack */
+	memset(ucp->__spare__, 0, sizeof (ucp->__spare__));
 }
 
 static void

@@ -10,7 +10,7 @@ MK_SSP=		no
 PROG?=		ld-elf.so.1
 SRCS=		rtld_start.S \
 		reloc.c rtld.c rtld_lock.c rtld_printf.c map_object.c \
-		malloc.c xmalloc.c debug.c libmap.c
+		malloc.c xmalloc.c debug.c libmap.c safe_stack.c
 MAN=		rtld.1
 CSTD?=		gnu99
 TOPSRCDIR=	${.CURDIR}/../..

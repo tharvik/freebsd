@@ -65,8 +65,12 @@ _start(char **ap, void (*cleanup)(void))
 
 	if (&_DYNAMIC != NULL)
 		atexit(cleanup);
-	else
+	else {
 		_init_tls();
+		/* Initialize the unsafe stack, and store its pointer into the tcb. */
+		void *unsafestack = init_unsafestack();
+		__builtin_safestack_set_usp(unsafestack);
+	}
 
 #ifdef GCRT
 	atexit(_mcleanup);
@@ -75,5 +79,6 @@ __asm__("eprol:");
 #endif
 
 	handle_static_init(argc, argv, env);
+
 	exit(main(argc, argv, env));
 }

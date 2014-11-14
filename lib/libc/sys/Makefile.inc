@@ -24,7 +24,8 @@ SRCS+=	\
 	stack_protector.c \
 	stack_protector_compat.c \
 	__error.c \
-	interposing_table.c
+	interposing_table.c \
+	safestack.c
 
 .if ${MK_SYSCALL_COMPAT} != "no"
 SYSCALL_COMPAT_SRCS= \

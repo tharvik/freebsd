@@ -277,6 +277,11 @@ int __getosreldate(void);
 #include <sys/_types.h>
 #include <sys/_sigset.h>
 
+struct __ucontext;
+extern int      __sys_getcontext(struct __ucontext *);
+extern int      __sys_setcontext(const struct __ucontext *);
+extern int      __sys_swapcontext(struct __ucontext *, const struct __ucontext *);
+
 /* With pad */
 __off_t	__sys_freebsd6_lseek(int, int, __off_t, int);
 int	__sys_freebsd6_ftruncate(int, int, __off_t);
@@ -312,6 +317,7 @@ int		__sys_ftruncate(int, __off_t);
 int		__sys_gettimeofday(struct timeval *, struct timezone *);
 __off_t		__sys_lseek(int, __off_t, int);
 void	       *__sys_mmap(void *, __size_t, int, int, int, __off_t);
+int	        __sys_munmap(void *, __size_t);
 int		__sys_msync(void *, __size_t, int);
 int		__sys_nanosleep(const struct timespec *, struct timespec *);
 int		__sys_open(const char *, int, ...);
@@ -371,5 +377,10 @@ void __init_elf_aux_vector(void);
 
 void	_pthread_cancel_enter(int);
 void	_pthread_cancel_leave(int);
+
+int   safestack_munmap(void *, __size_t);
+int   safestack_setcontext(const struct __ucontext *);
+int   safestack_swapcontext(struct __ucontext *, const struct __ucontext *);
+int   safestack_getcontext(struct __ucontext *);
 
 #endif /* _LIBC_PRIVATE_H_ */

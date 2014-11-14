@@ -63,6 +63,7 @@
 #include "rtld_tls.h"
 #include "rtld_printf.h"
 #include "notes.h"
+#include "safe_stack.h"
 
 #ifndef COMPAT_32BIT
 #define PATH_RTLD	"/libexec/ld-elf.so.1"
@@ -614,6 +615,16 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
      */
     dbg("initializing initial thread local storage");
     allocate_initial_tls(obj_list);
+
+    /*
+     * Setup the unsafe stack, this should be done as soon as possible,
+     * after the tls initialization.
+     */
+    dbg("initializing the unsafe stack");
+    void *unsafe_stack = _rtld_allocate_unsafe_stack();
+    if (!unsafe_stack)
+      die();
+    __builtin_safestack_set_usp(unsafe_stack);
 
     dbg("initializing key program variables");
     set_program_var("__progname", argv[0] != NULL ? basename(argv[0]) : "");

@@ -50,7 +50,11 @@ typedef struct __ucontext {
 	stack_t		uc_stack;
 	int		uc_flags;
 #define	UCF_SWAPPED	0x00000001	/* Used by swapcontext(3). */
-	int		__spare__[4];
+
+	union {
+          void          *uc_usp_ptr;    /* Unsafe stack pointer */
+	  int		__spare__[4];
+	};
 } ucontext_t;
 
 #if defined(_KERNEL) && defined(COMPAT_FREEBSD4)

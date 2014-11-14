@@ -23,10 +23,24 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/mman.h>
+#include <link.h>
+#include <unistd.h>
+#include <machine/param.h>
+
 #include "notes.h"
+
+#ifdef PIC
+# define SAFESTACK_PROT _rtld_get_stack_prot()
+#else
+# define SAFESTACK_PROT (PROT_READ | PROT_WRITE | PROT_EXEC)
+#endif /* PIC */
 
 extern int main(int, char **, char **);
 
@@ -58,6 +72,34 @@ finalizer(void)
 			(fn)();
 	}
 	_fini();
+}
+
+static inline void *
+init_unsafestack(void)
+{
+	struct rlimit  rl;
+        size_t	       stack_size = sizeof (void *) * (1 << 20); // pointer size * 1MB
+	size_t	       guard_size = PAGE_SIZE > 4096 ? PAGE_SIZE : 4096;
+	void	      *memory;
+
+	/* getrlimit to know the stack size */
+	if (!syscall(SYS_getrlimit, RLIMIT_STACK, &rl) &&
+            rl.rlim_cur != RLIM_INFINITY)
+		stack_size = rl.rlim_cur;
+
+	/* Allocate memory.
+         * About the stack protection, it should use rtld_get_stack_prot for
+         * dynamicly linked binaries. But how to know when it is the case? */
+	memory = ((void *(*)(int, void *, size_t, int, int, int, off_t))syscall)(
+                SYS_mmap, NULL, rl.rlim_cur + guard_size,
+                SAFESTACK_PROT, MAP_STACK, -1, 0);
+	if (memory == MAP_FAILED)
+		exit(1);
+
+	/* setup the stack guard */
+	syscall(SYS_mprotect, memory, guard_size, PROT_NONE);
+
+	return ((char *)memory) + guard_size + stack_size;
 }
 
 static inline void

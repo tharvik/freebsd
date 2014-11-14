@@ -35,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 /* Prototypes */
 extern void _ctx_start(ucontext_t *, int argc, ...);
@@ -160,4 +161,7 @@ __makecontext(ucontext_t *ucp, void (*start)(void), int argc, ...)
 		ucp->uc_mcontext.mc_esp = (int)stack_top + sizeof(caddr_t);
 		ucp->uc_mcontext.mc_eip = (int)_ctx_start;
 	}
+
+	/* Clear the spare field for safestack */
+	memset(ucp->__spare__, 0, sizeof (ucp->__spare__));
 }
