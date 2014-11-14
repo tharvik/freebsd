@@ -40,6 +40,7 @@ SRCS+= \
 	thr_rtld.c \
 	thr_rwlock.c \
 	thr_rwlockattr.c \
+	thr_safestack.c \
 	thr_self.c \
 	thr_sem.c \
 	thr_setprio.c \

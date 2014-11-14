@@ -148,7 +148,7 @@ _pthread_create(pthread_t * thread, const pthread_attr_t * attr,
 		locked = 1;
 	} else
 		locked = 0;
-	param.start_func = (void (*)(void *)) thread_start;
+        param.start_func = _thr_init_unsafe_stack;
 	param.arg = new_thread;
 	param.stack_base = new_thread->attr.stackaddr_attr;
 	param.stack_size = new_thread->attr.stacksize_attr;
@@ -161,7 +161,7 @@ _pthread_create(pthread_t * thread, const pthread_attr_t * attr,
 		param.flags |= THR_SYSTEM_SCOPE;
 	if (new_thread->attr.sched_inherit == PTHREAD_INHERIT_SCHED)
 		param.rtp = NULL;
-	else { 	 
+	else {
 		sched_param.sched_priority = new_thread->attr.prio;
 		_schedparam_to_rtp(new_thread->attr.sched_policy,
 			&sched_param, &rtp);
@@ -230,6 +230,7 @@ out:
 static int
 create_stack(struct pthread_attr *pattr)
 {
+        struct pthread_attr tmp;
 	int ret;
 
 	/* Check if a stack was specified in the thread attributes: */
@@ -238,8 +239,20 @@ create_stack(struct pthread_attr *pattr)
 		pattr->flags |= THR_STACK_USER;
 		ret = 0;
 	}
-	else
+	else {
 		ret = _thr_stack_alloc(pattr);
+                if (ret)
+                        return (ret);
+        }
+
+        /* Allocate the unsafe stack */
+        tmp = *pattr;
+        ret = _thr_stack_alloc(&tmp);
+        if (ret) {
+                _thr_stack_free(pattr);
+                return (ret);
+        }
+        pattr->unsafe_stackaddr_attr = tmp->stackaddr_attr;
 	return (ret);
 }
 
@@ -247,6 +260,9 @@ static void
 thread_start(struct pthread *curthread)
 {
 	sigset_t set;
+
+        __safestack_unsafe_stack_ptr = curthread->attr.unsafe_stackaddr_attr +
+                curthread->attr.stacksize_attr;
 
 	if (curthread->attr.suspend == THR_CREATE_SUSPENDED)
 		set = curthread->sigmask;

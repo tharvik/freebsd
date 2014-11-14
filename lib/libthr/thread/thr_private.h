@@ -245,6 +245,7 @@ struct pthread_attr {
 #define	THR_STACK_USER		0x100	/* 0xFF reserved for <pthread.h> */
 	int	flags;
 	void	*stackaddr_attr;
+        void    *unsafe_stackaddr_attr;
 	size_t	stacksize_attr;
 	size_t	guardsize_attr;
 #define pthread_attr_end_copy	cpuset
@@ -911,6 +912,8 @@ void __pthread_cxa_finalize(struct dl_phdr_info *phdr_info);
 void _thr_tsd_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_sigact_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_stack_fix_protection(struct pthread *thrd);
+
+extern __thread void *__safestack_unsafe_stack_ptr;
 
 __END_DECLS
 

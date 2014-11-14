@@ -96,6 +96,7 @@ _thr_gc(struct pthread *curthread)
 {
 	struct pthread *td, *td_next;
 	TAILQ_HEAD(, pthread) worklist;
+        struct pthread_attr us_attr; /* unsafe stack attr */
 
 	TAILQ_INIT(&worklist);
 	THREAD_LIST_WRLOCK(curthread);
@@ -106,7 +107,11 @@ _thr_gc(struct pthread *curthread)
 			/* make sure we are not still in userland */
 			continue;
 		}
-		_thr_stack_free(&td->attr);
+                us_attr = td->attr;
+                us_attr->stackaddr_attr = tmp_attr->unsafe_stackaddr_attr;
+                _thr_stack_free(&td->attr); /* free the safe stack */
+		_thr_stack_free(&us_attr->attr); /* free the unsafe stack */
+
 		THR_GCLIST_REMOVE(td);
 		TAILQ_INSERT_HEAD(&worklist, td, gcle);
 	}
