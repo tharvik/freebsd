@@ -58,6 +58,11 @@ _start(char **ap, void (*cleanup)(void))
 	char **argv;
 	char **env;
 
+	/* Initialize the unsafe stack, and store its pointer into the tcb. */
+	void *unsafestack = init_unsafestack();
+	__asm __volatile("movq %0, %%fs:0x18"
+			 :: "r" (unsafestack));
+
 	argc = *(long *)(void *)ap;
 	argv = ap + 1;
 	env = ap + 2 + argc;

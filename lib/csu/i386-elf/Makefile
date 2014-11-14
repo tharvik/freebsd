@@ -7,7 +7,6 @@ OBJS=		${SRCS:N*.h:R:S/$/.o/g}
 OBJS+=		gcrt1.o crt1.o Scrt1.o
 CFLAGS+=	-I${.CURDIR}/../common \
 		-I${.CURDIR}/../../libc/include
-
 all: ${OBJS}
 
 CLEANFILES=	${OBJS} crt1_c.o crt1_s.o gcrt1_c.o Scrt1_c.o
