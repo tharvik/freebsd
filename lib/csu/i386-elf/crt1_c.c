@@ -55,6 +55,7 @@ extern int etext;
 void _start1(fptr, int, char *[]) __dead2;
 
 /* The entry function, C part. */
+__attribute__((no_safe_stack))
 void
 _start1(fptr cleanup, int argc, char *argv[])
 {

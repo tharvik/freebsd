@@ -51,6 +51,7 @@ extern int etext;
 void _start(char **, void (*)(void));
 
 /* The entry function. */
+__attribute__((no_safe_stack))
 void
 _start(char **ap, void (*cleanup)(void))
 {

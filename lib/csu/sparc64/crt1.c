@@ -74,6 +74,7 @@ void _start(char **, void (*)(void), struct Struct_Obj_Entry *,
  * for dynamic executables since rtld runs first.
  */
 /* ARGSUSED */
+__attribute__((no_safe_stack))
 void
 _start(char **ap, void (*cleanup)(void), struct Struct_Obj_Entry *obj __unused,
     struct ps_strings *ps_strings __unused)

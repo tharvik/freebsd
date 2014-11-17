@@ -27,6 +27,7 @@
 __FBSDID("$FreeBSD$");
 
 #include "notes.h"
+#include "../../libthr/thread/safestack.h"
 
 extern int main(int, char **, char **);
 
@@ -45,6 +46,7 @@ extern int _DYNAMIC;
 char **environ;
 const char *__progname = "";
 
+__attribute__((no_safe_stack))
 static void
 finalizer(void)
 {
@@ -60,6 +62,7 @@ finalizer(void)
 	_fini();
 }
 
+__attribute__((no_safe_stack))
 static inline void
 handle_static_init(int argc, char **argv, char **env)
 {
@@ -68,6 +71,9 @@ handle_static_init(int argc, char **argv, char **env)
 
 	if (&_DYNAMIC != NULL)
 		return;
+
+	/* Initialize the unsafe stack. See libthr/thread/thr_safestack.c */
+	__safestack_init();
 
 	atexit(finalizer);
 
@@ -86,6 +92,7 @@ handle_static_init(int argc, char **argv, char **env)
 	}
 }
 
+__attribute__((no_safe_stack))
 static inline void
 handle_argv(int argc, char *argv[], char **env)
 {

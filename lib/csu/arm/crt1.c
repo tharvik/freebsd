@@ -93,6 +93,7 @@ __asm("	.text			\n"
 "\n"
 "	b	 __start  ");
 /* ARGSUSED */
+__attribute__((no_safe_stack))
 void
 __start(int argc, char **argv, char **env, struct ps_strings *ps_strings,
     const struct Struct_Obj_Entry *obj __unused, void (*cleanup)(void))
