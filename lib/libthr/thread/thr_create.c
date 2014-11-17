@@ -230,7 +230,7 @@ out:
 static int
 create_stack(struct pthread_attr *pattr)
 {
-        struct pthread_attr tmp;
+	struct pthread_attr tmp;
 	int ret;
 
 	/* Check if a stack was specified in the thread attributes: */
@@ -241,18 +241,18 @@ create_stack(struct pthread_attr *pattr)
 	}
 	else {
 		ret = _thr_stack_alloc(pattr);
-                if (ret)
-                        return (ret);
-        }
+		if (ret)
+			return (ret);
+	}
 
-        /* Allocate the unsafe stack */
-        tmp = *pattr;
-        ret = _thr_stack_alloc(&tmp);
-        if (ret) {
-                _thr_stack_free(pattr);
-                return (ret);
-        }
-        pattr->unsafe_stackaddr_attr = tmp.stackaddr_attr;
+	/* Allocate the unsafe stack */
+	tmp = *pattr;
+	ret = _thr_stack_alloc(&tmp);
+	if (ret) {
+		_thr_stack_free(pattr);
+		return (ret);
+	}
+	pattr->unsafe_stackaddr_attr = tmp.stackaddr_attr;
 	return (ret);
 }
 
