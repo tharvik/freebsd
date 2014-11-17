@@ -69,6 +69,7 @@
 #include "pthread_md.h"
 #include "thr_umtx.h"
 #include "thread_db.h"
+#include "safestack.h"
 
 #ifdef _PTHREAD_FORCED_UNWIND
 #define _BSD_SOURCE
@@ -912,12 +913,6 @@ void __pthread_cxa_finalize(struct dl_phdr_info *phdr_info);
 void _thr_tsd_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_sigact_unload(struct dl_phdr_info *phdr_info) __hidden;
 void _thr_stack_fix_protection(struct pthread *thrd);
-
-void __safestack_init(void);
-void *__safestack_get_unsafe_stack_start(void);
-void *__safestack_get_unsafe_stack_ptr(void);
-void *__safestack_get_safe_stack_ptr(void);
-extern __thread void *__safestack_unsafe_stack_ptr;
 
 __END_DECLS
 
