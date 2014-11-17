@@ -108,9 +108,9 @@ _thr_gc(struct pthread *curthread)
 			continue;
 		}
                 us_attr = td->attr;
-                us_attr->stackaddr_attr = tmp_attr->unsafe_stackaddr_attr;
+                us_attr.stackaddr_attr = us_attr.unsafe_stackaddr_attr;
                 _thr_stack_free(&td->attr); /* free the safe stack */
-		_thr_stack_free(&us_attr->attr); /* free the unsafe stack */
+		_thr_stack_free(&us_attr); /* free the unsafe stack */
 
 		THR_GCLIST_REMOVE(td);
 		TAILQ_INSERT_HEAD(&worklist, td, gcle);

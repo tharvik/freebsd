@@ -17,7 +17,7 @@ void *__safestack_get_unsafe_stack_start()
         struct pthread *curthread;
 
         curthread = _get_curthread();
-        return curthread->attr.unsafe_stackaddr_attr +
+        return ((char *)curthread->attr.unsafe_stackaddr_attr) +
                 curthread->attr.stacksize_attr;
 }
 

@@ -148,7 +148,7 @@ _pthread_create(pthread_t * thread, const pthread_attr_t * attr,
 		locked = 1;
 	} else
 		locked = 0;
-        param.start_func = _thr_init_unsafe_stack;
+	param.start_func = (void (*)(void *)) thread_start;
 	param.arg = new_thread;
 	param.stack_base = new_thread->attr.stackaddr_attr;
 	param.stack_size = new_thread->attr.stacksize_attr;
@@ -252,7 +252,7 @@ create_stack(struct pthread_attr *pattr)
                 _thr_stack_free(pattr);
                 return (ret);
         }
-        pattr->unsafe_stackaddr_attr = tmp->stackaddr_attr;
+        pattr->unsafe_stackaddr_attr = tmp.stackaddr_attr;
 	return (ret);
 }
 
@@ -261,7 +261,7 @@ thread_start(struct pthread *curthread)
 {
 	sigset_t set;
 
-        __safestack_unsafe_stack_ptr = curthread->attr.unsafe_stackaddr_attr +
+        __safestack_unsafe_stack_ptr = ((char *)curthread->attr.unsafe_stackaddr_attr) +
                 curthread->attr.stacksize_attr;
 
 	if (curthread->attr.suspend == THR_CREATE_SUSPENDED)
