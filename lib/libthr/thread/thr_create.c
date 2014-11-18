@@ -262,7 +262,9 @@ thread_start(struct pthread *curthread)
 	sigset_t set;
 
 	/* Initialize the unsafe stack */
-	__safestack_init();
+        __safestack_unsafe_stack_start = ((char *)curthread->attr.unsafe_stackaddr_attr);
+	__safestack_unsafe_stack_ptr   = ((char *)curthread->attr.unsafe_stackaddr_attr) +
+		curthread->attr.stacksize_attr;
 
 	if (curthread->attr.suspend == THR_CREATE_SUSPENDED)
 		set = curthread->sigmask;

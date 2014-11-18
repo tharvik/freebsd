@@ -1,27 +1,23 @@
 #include "thr_private.h"
 
 /* TLS unsafe stack pointer, used by LLVM's safestack generated code. */
-__thread void *__safestack_unsafe_stack_ptr = NULL;
+__thread void *__safestack_unsafe_stack_ptr   = NULL;
+__thread void *__safestack_unsafe_stack_start = NULL;
 
 void
 __safestack_init(void)
 {
-	struct pthread *curthread = _get_curthread();
-	__safestack_unsafe_stack_ptr = ((char *)curthread->attr.unsafe_stackaddr_attr) +
-		curthread->attr.stacksize_attr;
+        /* Nothing to do here, pure compat. */
 }
 
-/* The three following function are provided has helpers, like for
- * Google chrome's garbage collector.
+/*
+ * The three following function are provided as stack introspection helpers,
+ * used by Google chrome's garbage collector for example.
  */
 void *
 __safestack_get_unsafe_stack_start()
 {
-	struct pthread *curthread;
-
-	curthread = _get_curthread();
-	return ((char *)curthread->attr.unsafe_stackaddr_attr) +
-		curthread->attr.stacksize_attr;
+        return __safestack_unsafe_stack_start;
 }
 
 void *

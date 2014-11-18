@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-SSP_CFLAGS=
+SSP_CFLAGS=-fno-safe-stack
 
 SED_FIX_NOTE = -i "" -e '/\.note\.tag/s/progbits/note/'
 

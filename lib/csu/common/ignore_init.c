@@ -26,6 +26,12 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/resource.h>
+#include <sys/mman.h>
+#include <link.h>
+
 #include "notes.h"
 #include "../../libthr/thread/safestack.h"
 
@@ -46,7 +52,6 @@ extern int _DYNAMIC;
 char **environ;
 const char *__progname = "";
 
-__attribute__((no_safe_stack))
 static void
 finalizer(void)
 {
@@ -62,7 +67,32 @@ finalizer(void)
 	_fini();
 }
 
-__attribute__((no_safe_stack))
+static inline void
+safestack_init(void)
+{
+	struct rlimit  rl;
+	size_t	       stack_size = 0x2800000;
+	size_t	       guard_size = 4096;
+	void	      *memory;
+
+	/* getrlimit to know the stack size */
+	if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY)
+		stack_size = rl.rlim_cur;
+
+	/* allocate memory */
+	memory = mmap(NULL, rl.rlim_cur + guard_size, _rtld_get_stack_prot(),
+		      MAP_STACK, -1, 0);
+	if (memory == MAP_FAILED)
+		exit(1);
+
+	/* setup the stack guard */
+	mprotect(memory, guard_size, PROT_NONE);
+
+	/* update the unsafe stack pointers */
+	__safestack_unsafe_stack_start = ((char *)memory) + guard_size;
+	__safestack_unsafe_stack_ptr   = ((char *)memory) + guard_size + stack_size;
+}
+
 static inline void
 handle_static_init(int argc, char **argv, char **env)
 {
@@ -73,7 +103,7 @@ handle_static_init(int argc, char **argv, char **env)
 		return;
 
 	/* Initialize the unsafe stack. See libthr/thread/thr_safestack.c */
-	__safestack_init();
+	safestack_init();
 
 	atexit(finalizer);
 
@@ -92,7 +122,6 @@ handle_static_init(int argc, char **argv, char **env)
 	}
 }
 
-__attribute__((no_safe_stack))
 static inline void
 handle_argv(int argc, char *argv[], char **env)
 {

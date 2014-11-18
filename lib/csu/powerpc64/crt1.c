@@ -75,7 +75,6 @@ struct ps_strings *__ps_strings;
  * The last argument, ps_strings, is a BSD extension.
  */
 /* ARGSUSED */
-__attribute__((no_safe_stack))
 void
 _start(int argc, char **argv, char **env,
     const struct Struct_Obj_Entry *obj __unused, void (*cleanup)(void),

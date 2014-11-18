@@ -58,7 +58,6 @@ extern int etext;
 void __start(char **, void (*)(void), struct Struct_Obj_Entry *, struct ps_strings *);
 
 /* The entry function. */
-__attribute__((no_safe_stack))
 void
 __start(char **ap,
 	void (*cleanup)(void),			/* from shared loader */
