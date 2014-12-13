@@ -30,5 +30,7 @@ FBSDprivate_1.0 {
     _rtld_atfork_post;
     _rtld_addr_phdr;
     _rtld_get_stack_prot;
+    _rtld_allocate_unsafe_stack;
+    _rtld_set_unsafe_stack;
     _r_debug_postinit;
 };

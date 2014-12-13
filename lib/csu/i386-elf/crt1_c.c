@@ -60,17 +60,18 @@ _start1(fptr cleanup, int argc, char *argv[])
 {
 	char **env;
 
-        /* Initialize the unsafe stack, and store its pointer into the tcb. */
-	void *unsafestack = init_unsafestack();
-	__asm __volatile("movl %0, %%gs:0x0C"
-			 :: "r" (unsafestack));
-
 	env = argv + argc + 1;
 	handle_argv(argc, argv, env);
+
 	if (&_DYNAMIC != NULL)
 		atexit(cleanup);
-	else
+	else {
 		_init_tls();
+		/* Initialize the unsafe stack, and store its pointer into the tcb. */
+		void *unsafestack = init_unsafestack();
+		__asm __volatile("movl %0, %%gs:0x0C"
+				 :: "r" (unsafestack));
+	}
 
 #ifdef GCRT
 	atexit(_mcleanup);

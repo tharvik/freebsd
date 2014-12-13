@@ -65,19 +65,19 @@ _start(char **ap, void (*cleanup)(void))
 
 	if (&_DYNAMIC != NULL)
 		atexit(cleanup);
-	else
+	else {
 		_init_tls();
+		/* Initialize the unsafe stack, and store its pointer into the tcb. */
+		void *unsafestack = init_unsafestack();
+		__asm __volatile("movq %0, %%fs:0x18"
+				 :: "r" (unsafestack));
+	}
 
 #ifdef GCRT
 	atexit(_mcleanup);
 	monstartup(&eprol, &etext);
 __asm__("eprol:");
 #endif
-
-        /* Initialize the unsafe stack, and store its pointer into the tcb. */
-        void *unsafestack = init_unsafestack();
-        __asm __volatile("movq %0, %%fs:0x18"
-                         :: "r" (unsafestack));
 
 	handle_static_init(argc, argv, env);
 
