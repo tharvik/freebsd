@@ -234,6 +234,12 @@ extern int	__sys_truncate(const char *, __off_t);
 extern __ssize_t __sys_pread(int, void *, __size_t, __off_t);
 extern __ssize_t __sys_pwrite(int, const void *, __size_t, __off_t);
 extern void *	__sys_mmap(void *, __size_t, int, int, int, __off_t);
+extern int      __sys_munmap(void *, __size_t);
+
+struct __ucontext;
+extern int      __sys_getcontext(struct __ucontext *);
+extern int      __sys_setcontext(const struct __ucontext *);
+extern int      __sys_swapcontext(struct __ucontext *, const struct __ucontext *);
 
 /* With pad */
 extern __off_t	__sys_freebsd6_lseek(int, int, __off_t, int);
