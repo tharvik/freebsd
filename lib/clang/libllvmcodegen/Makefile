@@ -96,6 +96,7 @@ SRCS=	AggressiveAntiDepBreaker.cpp \
 	RegisterCoalescer.cpp \
 	RegisterPressure.cpp \
 	RegisterScavenging.cpp \
+	SafeStack.cpp \
 	ScheduleDAG.cpp \
 	ScheduleDAGInstrs.cpp \
 	ScheduleDAGPrinter.cpp \

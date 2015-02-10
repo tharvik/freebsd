@@ -1,0 +1,2812 @@
+From f89e06914c67e2844e5998d8b02fb37cb0a38203 Mon Sep 17 00:00:00 2001
+From: Volodymyr Kuznetsov <vova.kuznetsov@epfl.ch>
+Date: Thu, 16 Oct 2014 16:50:58 +0200
+Subject: [PATCH 1/1] Initial SafeStack release
+
+---
+ docs/LangRef.rst                                 |   54 +
+ include/llvm/Bitcode/LLVMBitCodes.h              |    3 +-
+ include/llvm/CodeGen/Passes.h                    |    4 +
+ include/llvm/IR/Attributes.h                     |    1 +
+ include/llvm/IR/Intrinsics.td                    |    7 +
+ include/llvm/InitializePasses.h                  |    1 +
+ include/llvm/MC/MCELFStreamer.h                  |    1 +
+ include/llvm/MC/MCObjectStreamer.h               |    0
+ include/llvm/MC/MCStreamer.h                     |    2 +
+ include/llvm/Target/TargetLowering.h             |   24 +
+ include/llvm/Transforms/Utils/Local.h            |    5 +
+ lib/AsmParser/LLLexer.cpp                        |    1 +
+ lib/AsmParser/LLParser.cpp                       |    3 +
+ lib/AsmParser/LLToken.h                          |    1 +
+ lib/Bitcode/Reader/BitcodeReader.cpp             |    2 +
+ lib/Bitcode/Writer/BitcodeWriter.cpp             |    2 +
+ lib/CodeGen/AsmPrinter/AsmPrinter.cpp            |    4 +
+ lib/CodeGen/CMakeLists.txt                       |    1 +
+ lib/CodeGen/Passes.cpp                           |    3 +
+ lib/CodeGen/SafeStack.cpp                        |  600 +++++++++
+ lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp |   25 +
+ lib/IR/Attributes.cpp                            |    3 +
+ lib/IR/Verifier.cpp                              |    1 +
+ lib/MC/MCAsmStreamer.cpp                         |    7 +-
+ lib/MC/MCELFStreamer.cpp                         |   16 +
+ lib/Target/CppBackend/CPPBackend.cpp             |    1 +
+ lib/Target/X86/X86ISelLowering.cpp               |   42 +
+ lib/Target/X86/X86ISelLowering.h                 |    6 +
+ lib/Transforms/IPO/Inliner.cpp                   |   15 +-
+ lib/Transforms/Utils/Local.cpp                   |   27 +
+ test/CodeGen/X86/safestack.ll                    | 1515 ++++++++++++++++++++++
+ 31 files changed, 2373 insertions(+), 4 deletions(-)
+ mode change 100644 => 100755 include/llvm/MC/MCELFStreamer.h
+ mode change 100644 => 100755 include/llvm/MC/MCObjectStreamer.h
+ mode change 100644 => 100755 include/llvm/MC/MCStreamer.h
+ mode change 100644 => 100755 lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+ create mode 100755 lib/CodeGen/SafeStack.cpp
+ mode change 100644 => 100755 lib/MC/MCAsmStreamer.cpp
+ mode change 100644 => 100755 lib/MC/MCELFStreamer.cpp
+ mode change 100644 => 100755 lib/Target/X86/X86ISelLowering.cpp
+ create mode 100644 test/CodeGen/X86/safestack.ll
+
+diff --git docs/LangRef.rst docs/LangRef.rst
+index 17ccf9b..334c1e9 100644
+--- docs/LangRef.rst
++++ docs/LangRef.rst
+@@ -9346,3 +9346,57 @@ Stack Map Intrinsics
+ LLVM provides experimental intrinsics to support runtime patching
+ mechanisms commonly desired in dynamic language JITs. These intrinsics
+ are described in :doc:`StackMaps`.
++
++SafeStack Intrinsics
++--------------------
++
++'``llvm.safestack_get_usp``' Intrinsic
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Syntax:
++"""""""
++
++::
++
++      declare i8* @llvm.safestack_get_usp()
++
++Overview:
++"""""""""
++
++The ``llvm.safestack_get_usp()`` intrinsic returns the pointer to the unsafe stack.
++
++Arguments:
++""""""""""
++
++None.
++
++Semantics:
++""""""""""
++
++The intrinsic helps to get the unsafe stack pointer.
++
++'``llvm.safestack_get_usp``' Intrinsic
++^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++Syntax:
++"""""""
++
++::
++
++      declare void @llvm.safestack_set_usp(i8*)
++
++Overview:
++"""""""""
++
++The ``llvm.safestack_set_usp(i8*)`` intrinsic sets the unsafe stack pointer.
++
++Arguments:
++""""""""""
++
++The new unsafe stack pointer.
++
++Semantics:
++""""""""""
++
++The intrinsic helps to set the unsafe stack pointer.
++
+diff --git include/llvm/Bitcode/LLVMBitCodes.h include/llvm/Bitcode/LLVMBitCodes.h
+index ee2efa2..5749ce9 100644
+--- include/llvm/Bitcode/LLVMBitCodes.h
++++ include/llvm/Bitcode/LLVMBitCodes.h
+@@ -375,7 +375,8 @@ namespace bitc {
+     ATTR_KIND_IN_ALLOCA = 38,
+     ATTR_KIND_NON_NULL = 39,
+     ATTR_KIND_JUMP_TABLE = 40,
+-    ATTR_KIND_DEREFERENCEABLE = 41
++    ATTR_KIND_DEREFERENCEABLE = 41,
++    ATTR_KIND_SAFESTACK = 42
+   };
+
+   enum ComdatSelectionKindCodes {
+diff --git include/llvm/CodeGen/Passes.h include/llvm/CodeGen/Passes.h
+index 87f55e8..2358bc6 100644
+--- include/llvm/CodeGen/Passes.h
++++ include/llvm/CodeGen/Passes.h
+@@ -548,6 +548,10 @@ namespace llvm {
+   ///
+   FunctionPass *createStackProtectorPass(const TargetMachine *TM);
+
++  /// createSafeStackPass - This pass split the stack into the safe stack and
++  /// the unsafe stack to protect against stack-based overflow vulnerabilities.
++  Pass *createSafeStackPass(const TargetMachine *tli);
++
+   /// createMachineVerifierPass - This pass verifies cenerated machine code
+   /// instructions for correctness.
+   ///
+diff --git include/llvm/IR/Attributes.h include/llvm/IR/Attributes.h
+index 5ff48d6..f0ed9d7 100644
+--- include/llvm/IR/Attributes.h
++++ include/llvm/IR/Attributes.h
+@@ -106,6 +106,7 @@ public:
+     StackProtect,          ///< Stack protection.
+     StackProtectReq,       ///< Stack protection required.
+     StackProtectStrong,    ///< Strong Stack protection.
++    SafeStack,             ///< Safe Stack protection.
+     StructRet,             ///< Hidden pointer to structure to return
+     SanitizeAddress,       ///< AddressSanitizer is on.
+     SanitizeThread,        ///< ThreadSanitizer is on.
+diff --git include/llvm/IR/Intrinsics.td include/llvm/IR/Intrinsics.td
+index 0b8f64f..4373ec8 100644
+--- include/llvm/IR/Intrinsics.td
++++ include/llvm/IR/Intrinsics.td
+@@ -482,6 +482,13 @@ def int_experimental_patchpoint_i64 : Intrinsic<[llvm_i64_ty],
+                                                  llvm_ptr_ty, llvm_i32_ty,
+                                                  llvm_vararg_ty]>;
+
++//===------------------------- SafeStack Intrinsics -----------------------===//
++
++def int_safestack_get_usp : Intrinsic<[llvm_ptr_ty], []>,
++			    GCCBuiltin<"__builtin_safestack_get_usp">;
++def int_safestack_set_usp : Intrinsic<[], [llvm_ptr_ty]>,
++			    GCCBuiltin<"__builtin_safestack_set_ups">;
++
+ //===-------------------------- Other Intrinsics --------------------------===//
+ //
+ def int_flt_rounds : Intrinsic<[llvm_i32_ty]>,
+diff --git include/llvm/InitializePasses.h include/llvm/InitializePasses.h
+index 02f4259..5a96dd0 100644
+--- include/llvm/InitializePasses.h
++++ include/llvm/InitializePasses.h
+@@ -233,6 +233,7 @@ void initializeRegionOnlyPrinterPass(PassRegistry&);
+ void initializeRegionOnlyViewerPass(PassRegistry&);
+ void initializeRegionPrinterPass(PassRegistry&);
+ void initializeRegionViewerPass(PassRegistry&);
++void initializeSafeStackPass(PassRegistry&);
+ void initializeSCCPPass(PassRegistry&);
+ void initializeSROAPass(PassRegistry&);
+ void initializeSROA_DTPass(PassRegistry&);
+diff --git include/llvm/MC/MCELFStreamer.h include/llvm/MC/MCELFStreamer.h
+old mode 100644
+new mode 100755
+index 66729fe..f0bbb29
+--- include/llvm/MC/MCELFStreamer.h
++++ include/llvm/MC/MCELFStreamer.h
+@@ -47,6 +47,7 @@ public:
+   void InitSections() override;
+   void ChangeSection(const MCSection *Section,
+                      const MCExpr *Subsection) override;
++  void EmitSafeStackNote() override;
+   void EmitLabel(MCSymbol *Symbol) override;
+   void EmitAssemblerFlag(MCAssemblerFlag Flag) override;
+   void EmitThumbFunc(MCSymbol *Func) override;
+diff --git include/llvm/MC/MCObjectStreamer.h include/llvm/MC/MCObjectStreamer.h
+old mode 100644
+new mode 100755
+diff --git include/llvm/MC/MCStreamer.h include/llvm/MC/MCStreamer.h
+old mode 100644
+new mode 100755
+index 63a43d0..c52348e
+--- include/llvm/MC/MCStreamer.h
++++ include/llvm/MC/MCStreamer.h
+@@ -393,6 +393,8 @@ public:
+   // add the section we're emitting it to later.
+   virtual void EmitLabel(MCSymbol *Symbol);
+
++  virtual void EmitSafeStackNote() {}
++
+   virtual void EmitEHSymAttributes(const MCSymbol *Symbol, MCSymbol *EHSymbol);
+
+   /// EmitAssemblerFlag - Note in the output the specified @p Flag.
+diff --git include/llvm/Target/TargetLowering.h include/llvm/Target/TargetLowering.h
+index ea9a48e..d9ea2dd 100644
+--- include/llvm/Target/TargetLowering.h
++++ include/llvm/Target/TargetLowering.h
+@@ -898,6 +898,30 @@ public:
+     return false;
+   }
+
++  /// Return true if the target stores unsafe stack pointer at a fixed offset
++  /// in some non-standard address space, and populates the address space and
++  /// offset as appropriate.
++  virtual bool getUnsafeStackPtrLocation(unsigned &/*AddressSpace*/,
++                                         unsigned &/*Offset*/) const {
++    return false;
++  }
++
++  virtual Value *getUnsafeStackPtr(LLVMContext & C) const {
++      unsigned AddressSpace;
++      unsigned Offset;
++
++    if (getUnsafeStackPtrLocation(AddressSpace, Offset)) {
++        // The unsafe stack pointer is stored at a fixed location
++        // (usually in the thread control block)
++        Constant *OffsetVal = ConstantInt::get(Type::getInt32Ty(C), Offset);
++        return ConstantExpr::getIntToPtr(OffsetVal,
++          Type::getInt8PtrTy(C)->getPointerTo(AddressSpace));
++    }
++
++    // XXX
++    return nullptr;
++  }
++
+   /// Returns the maximal possible offset which can be used for loads / stores
+   /// from the global.
+   virtual unsigned getMaximalGlobalOffset() const {
+diff --git include/llvm/Transforms/Utils/Local.h include/llvm/Transforms/Utils/Local.h
+index c0c6906..3dde7da 100644
+--- include/llvm/Transforms/Utils/Local.h
++++ include/llvm/Transforms/Utils/Local.h
+@@ -270,6 +270,11 @@ DbgDeclareInst *FindAllocaDbgDeclare(Value *V);
+ bool replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                                 DIBuilder &Builder);
+
++/// replaceDbgValueForAlloca - Replaces llvm.dbg.value that use AI when
++/// alloca is replaced with a new value.
++bool replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
++                              DIBuilder &Builder);
++
+ /// \brief Remove all blocks that can not be reached from the function's entry.
+ ///
+ /// Returns true if any basic block was removed.
+diff --git lib/AsmParser/LLLexer.cpp lib/AsmParser/LLLexer.cpp
+index 962298f..bd5d049 100644
+--- lib/AsmParser/LLLexer.cpp
++++ lib/AsmParser/LLLexer.cpp
+@@ -641,6 +641,7 @@ lltok::Kind LLLexer::LexIdentifier() {
+   KEYWORD(ssp);
+   KEYWORD(sspreq);
+   KEYWORD(sspstrong);
++  KEYWORD(safestack);
+   KEYWORD(sanitize_address);
+   KEYWORD(sanitize_thread);
+   KEYWORD(sanitize_memory);
+diff --git lib/AsmParser/LLParser.cpp lib/AsmParser/LLParser.cpp
+index ac6e0e5..bd6f968 100644
+--- lib/AsmParser/LLParser.cpp
++++ lib/AsmParser/LLParser.cpp
+@@ -1038,6 +1038,7 @@ bool LLParser::ParseFnAttributeValuePairs(AttrBuilder &B,
+     case lltok::kw_ssp:               B.addAttribute(Attribute::StackProtect); break;
+     case lltok::kw_sspreq:            B.addAttribute(Attribute::StackProtectReq); break;
+     case lltok::kw_sspstrong:         B.addAttribute(Attribute::StackProtectStrong); break;
++    case lltok::kw_safestack:         B.addAttribute(Attribute::SafeStack); break;
+     case lltok::kw_sanitize_address:  B.addAttribute(Attribute::SanitizeAddress); break;
+     case lltok::kw_sanitize_thread:   B.addAttribute(Attribute::SanitizeThread); break;
+     case lltok::kw_sanitize_memory:   B.addAttribute(Attribute::SanitizeMemory); break;
+@@ -1339,6 +1340,7 @@ bool LLParser::ParseOptionalParamAttrs(AttrBuilder &B) {
+     case lltok::kw_ssp:
+     case lltok::kw_sspreq:
+     case lltok::kw_sspstrong:
++    case lltok::kw_safestack:
+     case lltok::kw_uwtable:
+       HaveError |= Error(Lex.getLoc(), "invalid use of function-only attribute");
+       break;
+@@ -1408,6 +1410,7 @@ bool LLParser::ParseOptionalReturnAttrs(AttrBuilder &B) {
+     case lltok::kw_ssp:
+     case lltok::kw_sspreq:
+     case lltok::kw_sspstrong:
++    case lltok::kw_safestack:
+     case lltok::kw_uwtable:
+       HaveError |= Error(Lex.getLoc(), "invalid use of function-only attribute");
+       break;
+diff --git lib/AsmParser/LLToken.h lib/AsmParser/LLToken.h
+index 2f02606..4363995 100644
+--- lib/AsmParser/LLToken.h
++++ lib/AsmParser/LLToken.h
+@@ -134,6 +134,7 @@ namespace lltok {
+     kw_ssp,
+     kw_sspreq,
+     kw_sspstrong,
++    kw_safestack,
+     kw_sret,
+     kw_sanitize_thread,
+     kw_sanitize_memory,
+diff --git lib/Bitcode/Reader/BitcodeReader.cpp lib/Bitcode/Reader/BitcodeReader.cpp
+index 47a3953..6fc5c8a 100644
+--- lib/Bitcode/Reader/BitcodeReader.cpp
++++ lib/Bitcode/Reader/BitcodeReader.cpp
+@@ -618,6 +618,8 @@ static Attribute::AttrKind GetAttrFromCode(uint64_t Code) {
+     return Attribute::StackProtectReq;
+   case bitc::ATTR_KIND_STACK_PROTECT_STRONG:
+     return Attribute::StackProtectStrong;
++  case bitc::ATTR_KIND_SAFESTACK:
++    return Attribute::SafeStack;
+   case bitc::ATTR_KIND_STRUCT_RET:
+     return Attribute::StructRet;
+   case bitc::ATTR_KIND_SANITIZE_ADDRESS:
+diff --git lib/Bitcode/Writer/BitcodeWriter.cpp lib/Bitcode/Writer/BitcodeWriter.cpp
+index b2e4948..d9eb932 100644
+--- lib/Bitcode/Writer/BitcodeWriter.cpp
++++ lib/Bitcode/Writer/BitcodeWriter.cpp
+@@ -231,6 +231,8 @@ static uint64_t getAttrKindEncoding(Attribute::AttrKind Kind) {
+     return bitc::ATTR_KIND_STACK_PROTECT_REQ;
+   case Attribute::StackProtectStrong:
+     return bitc::ATTR_KIND_STACK_PROTECT_STRONG;
++  case Attribute::SafeStack:
++    return bitc::ATTR_KIND_SAFESTACK;
+   case Attribute::StructRet:
+     return bitc::ATTR_KIND_STRUCT_RET;
+   case Attribute::SanitizeAddress:
+diff --git lib/CodeGen/AsmPrinter/AsmPrinter.cpp lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+old mode 100644
+new mode 100755
+index 424e759..c74cbb5
+--- lib/CodeGen/AsmPrinter/AsmPrinter.cpp
++++ lib/CodeGen/AsmPrinter/AsmPrinter.cpp
+@@ -872,6 +872,10 @@ void AsmPrinter::EmitFunctionBody() {
+ static const MCExpr *lowerConstant(const Constant *CV, AsmPrinter &AP);
+
+ bool AsmPrinter::doFinalization(Module &M) {
++  // Emit safe stack note
++  if (M.getModuleFlag("SafeStack"))
++    OutStreamer.EmitSafeStackNote();
++
+   // Emit global variables.
+   for (const auto &G : M.globals())
+     EmitGlobalVariable(&G);
+diff --git lib/CodeGen/CMakeLists.txt lib/CodeGen/CMakeLists.txt
+index b71b30c..4cc3c7e 100644
+--- lib/CodeGen/CMakeLists.txt
++++ lib/CodeGen/CMakeLists.txt
+@@ -90,6 +90,7 @@ add_llvm_library(LLVMCodeGen
+   RegisterCoalescer.cpp
+   RegisterPressure.cpp
+   RegisterScavenging.cpp
++  SafeStack.cpp
+   ScheduleDAG.cpp
+   ScheduleDAGInstrs.cpp
+   ScheduleDAGPrinter.cpp
+diff --git lib/CodeGen/Passes.cpp lib/CodeGen/Passes.cpp
+index 249b2d0..417a8da 100644
+--- lib/CodeGen/Passes.cpp
++++ lib/CodeGen/Passes.cpp
+@@ -446,6 +446,9 @@ void TargetPassConfig::addISelPrepare() {
+   if (!DisableVerify)
+     addPass(createDebugInfoVerifierPass());
+
++  // Add both the safe stack and the stack protection passes: each of them will
++  // only protect functions that have corresponding attributes.
++  addPass(createSafeStackPass(TM));
+   addPass(createStackProtectorPass(TM));
+
+   if (PrintISelInput)
+diff --git lib/CodeGen/SafeStack.cpp lib/CodeGen/SafeStack.cpp
+new file mode 100755
+index 0000000..fe21bd3
+--- /dev/null
++++ lib/CodeGen/SafeStack.cpp
+@@ -0,0 +1,600 @@
++//===-- SafeStack.cpp - Safe Stack Insertion --------------------*- C++ -*-===//
++//
++//                     The LLVM Compiler Infrastructure
++//
++// This file is distributed under the University of Illinois Open Source
++// License. See LICENSE.TXT for details.
++//
++//===----------------------------------------------------------------------===//
++//
++// This pass splits the stack into the safe stack (kept as-is for LLVM backend)
++// and the unsafe stack (explicitly allocated and managed through the runtime
++// support library).
++//
++//===----------------------------------------------------------------------===//
++
++#define DEBUG_TYPE "safestack"
++#include "llvm/Support/Debug.h"
++#include "llvm/CodeGen/Passes.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/DerivedTypes.h"
++#include "llvm/IR/Function.h"
++#include "llvm/IR/InstIterator.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/Intrinsics.h"
++#include "llvm/IR/IntrinsicInst.h"
++#include "llvm/IR/IRBuilder.h"
++#include "llvm/IR/DIBuilder.h"
++#include "llvm/IR/Module.h"
++#include "llvm/IR/DataLayout.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/CommandLine.h"
++#include "llvm/Analysis/AliasAnalysis.h"
++#include "llvm/Target/TargetLowering.h"
++#include "llvm/Target/TargetOptions.h"
++#include "llvm/Target/TargetSubtargetInfo.h"
++#include "llvm/Target/TargetFrameLowering.h"
++#include "llvm/Transforms/Utils/ModuleUtils.h"
++#include "llvm/Transforms/Utils/Local.h"
++#include "llvm/ADT/Triple.h"
++#include "llvm/ADT/Statistic.h"
++#include "llvm/Support/Format.h"
++#include "llvm/Support/raw_os_ostream.h"
++
++using namespace llvm;
++
++namespace llvm {
++
++STATISTIC(NumFunctions, "Total number of functions");
++STATISTIC(NumUnsafeStackFunctions, "Number of functions with unsafe stack");
++STATISTIC(NumUnsafeStackRestorePointsFunctions,
++          "Number of functions that use setjmp or exceptions");
++
++STATISTIC(NumAllocas, "Total number of allocas");
++STATISTIC(NumUnsafeStaticAllocas, "Number of unsafe static allocas");
++STATISTIC(NumUnsafeDynamicAllocas, "Number of unsafe dynamic allocas");
++STATISTIC(NumUnsafeStackRestorePoints, "Number of setjmps and landingpads");
++
++} // namespace llvm
++
++namespace {
++
++/// Check whether a given alloca instructino (AI) should be put on the safe
++/// stack or not. The function analyzes all uses of AI and checks whether it is
++/// only accessed in a memory safe way (as decided statically).
++bool IsSafeStackAlloca(const AllocaInst *AI) {
++  // Go through all uses of this alloca and check whether all accesses to the
++  // allocated object are statically known to be memory safe and, hence, the
++  // object can be placed on the safe stack.
++
++  SmallPtrSet<const Value*, 16> Visited;
++  SmallVector<const Instruction*, 8> WorkList;
++  WorkList.push_back(AI);
++
++  // A DFS search through all uses of the alloca in bitcasts/PHI/GEPs/etc.
++  while (!WorkList.empty()) {
++    const Instruction *V = WorkList.pop_back_val();
++    for (const Use &UI : V->uses()) {
++      const Instruction *I = cast<const Instruction>(UI.getUser());
++      assert(V == UI.get());
++
++      switch (I->getOpcode()) {
++      case Instruction::Load:
++        // Loading from a pointer is safe
++        break;
++      case Instruction::VAArg:
++        // "va-arg" from a pointer is safe
++        break;
++      case Instruction::Store:
++        if (V == I->getOperand(0))
++          // Stored the pointer - conservatively assume it may be unsafe
++          return false;
++        // Storing to the pointee is safe
++        break;
++
++      case Instruction::GetElementPtr:
++        if (!cast<const GetElementPtrInst>(I)->hasAllConstantIndices())
++          // GEP with non-constant indices can lead to memory errors
++          return false;
++
++        // We assume that GEP on static alloca with constant indices is safe,
++        // otherwise a compiler would detect it and warn during compilation.
++
++        if (!isa<const ConstantInt>(AI->getArraySize()))
++          // However, if the array size itself is not constant, the access
++          // might still be unsafe at runtime.
++          return false;
++
++        /* fallthough */
++
++      case Instruction::BitCast:
++      case Instruction::PHI:
++      case Instruction::Select:
++        // The object can be safe or not, depending on how the result of the
++        // BitCast/PHI/Select/GEP/etc. is used.
++        if (Visited.insert(I))
++          WorkList.push_back(cast<const Instruction>(I));
++        break;
++
++      case Instruction::Call:
++      case Instruction::Invoke: {
++        ImmutableCallSite CS(I);
++
++        // Given we don't care about information leak attacks at this point,
++        // the object is considered safe if a pointer to it is passed to a
++        // function that only reads memory nor returns any value. This function
++        // can neither do unsafe writes itself nor capture the pointer (or
++        // return it) to do unsafe writes to it elsewhere. The function also
++        // shouldn't unwind (a readonly function can leak bits by throwing an
++        // exception or not depending on the input value).
++        if (CS.onlyReadsMemory() /* && CS.doesNotThrow()*/ &&
++            I->getType()->isVoidTy())
++          continue;
++
++        // LLVM 'nocapture' attribute is only set for arguments whose address
++        // is not stored, passed around, or used in any other non-trivial way.
++        // We assume that passing a pointer to an object as a 'nocapture'
++        // argument is safe.
++        // FIXME: a more precise solution would require an interprocedural
++        // analysis here, which would look at all uses of an argument inside
++        // the function being called.
++        ImmutableCallSite::arg_iterator B = CS.arg_begin(), E = CS.arg_end();
++        for (ImmutableCallSite::arg_iterator A = B; A != E; ++A)
++          if (A->get() == V && !CS.doesNotCapture(A - B))
++            // The parameter is not marked 'nocapture' - unsafe
++            return false;
++        continue;
++      }
++
++      default:
++        // The object is unsafe if it is used in any other way.
++        return false;
++      }
++    }
++  }
++
++  // All uses of the alloca are safe, we can place it on the safe stack.
++  return true;
++}
++
++/// The SafeStack pass splits the stack of each function into the
++/// safe stack, which is only accessed through memory safe dereferences
++/// (as determined statically), and the unsafe stack, which contains all
++/// local variables that are accessed in unsafe ways.
++class SafeStack : public ModulePass {
++  const TargetMachine *TM;
++  const TargetLoweringBase *TLI;
++  const DataLayout *DL;
++  unsigned NoSafeStackMDKind;
++
++  AliasAnalysis *AA;
++
++  /// Thread-local variable that stores the unsafe stack pointer
++  Value *UnsafeStackPtr;
++
++  Type *StackPtrTy;
++  Type *IntPtrTy;
++  Type *Int32Ty;
++  Type *Int8Ty;
++
++  bool haveFunctionsWithSafeStack(Module &M) {
++    for (Function &F : M) {
++      if (F.hasFnAttribute(Attribute::SafeStack))
++        return true;
++    }
++    return false;
++  }
++
++  bool doPassInitialization(Module &M);
++  bool runOnFunction(Function &F);
++
++public:
++  static char ID; // Pass identification, replacement for typeid.
++  SafeStack(): ModulePass(ID), TM(nullptr), TLI(nullptr), DL(nullptr) {
++    initializeSafeStackPass(*PassRegistry::getPassRegistry());
++  }
++
++  SafeStack(const TargetMachine *TM)
++      : ModulePass(ID), TM(TM), TLI(nullptr), DL(nullptr) {
++    initializeSafeStackPass(*PassRegistry::getPassRegistry());
++  }
++
++  virtual void getAnalysisUsage(AnalysisUsage &AU) const {
++    AU.addRequired<AliasAnalysis>();
++  }
++
++  virtual bool runOnModule(Module &M) {
++    DEBUG(dbgs() << "[SafeStack] Module: "
++                 << M.getModuleIdentifier() << "\n");
++
++    // Does the module have any functions that require safe stack?
++    if (!haveFunctionsWithSafeStack(M)) {
++      DEBUG(dbgs() << "[SafeStack] no functions to instrument\n");
++      return false; // Nothing to do
++    }
++
++    AA = &getAnalysis<AliasAnalysis>();
++
++    assert(TM != NULL && "SafeStack requires TargetMachine");
++    TLI = TM->getTargetLowering();
++    DL = TLI->getDataLayout();
++
++    StackPtrTy = Type::getInt8PtrTy(M.getContext());
++    IntPtrTy = DL->getIntPtrType(M.getContext());
++    Int32Ty = Type::getInt32Ty(M.getContext());
++    Int8Ty = Type::getInt8Ty(M.getContext());
++    NoSafeStackMDKind = M.getMDKindID("no_safe_stack");
++
++    // Add module-level code (e.g., runtime support function prototypes)
++    doPassInitialization(M);
++
++    // Add safe stack instrumentation to all functions that need it
++    bool safestack_applied = false;
++    for (Function &F : M) {
++      DEBUG(dbgs() << "[SafeStack] Function: " << F.getName() << "\n");
++
++      if (!F.hasFnAttribute(Attribute::SafeStack)) {
++        DEBUG(dbgs() << "[SafeStack]     safestack is not requested"
++                        " for this function\n");
++        continue;
++      }
++
++      if (F.isDeclaration()) {
++        DEBUG(dbgs() << "[SafeStack]     function definition"
++                        " is not available\n");
++        continue;
++      }
++
++      {
++        // Make sure the regular stack protector won't run on this function
++        // (safestack attribute takes precedence)
++        AttrBuilder B;
++        B.addAttribute(Attribute::StackProtect)
++            .addAttribute(Attribute::StackProtectReq)
++            .addAttribute(Attribute::StackProtectStrong);
++        F.removeAttributes(AttributeSet::FunctionIndex, AttributeSet::get(
++              F.getContext(), AttributeSet::FunctionIndex, B));
++      }
++
++      if (AA->onlyReadsMemory(&F)) {
++        // XXX: we don't protect against information leak attacks for now
++        DEBUG(dbgs() << "[SafeStack]     function only reads memory\n");
++        continue;
++      }
++
++      runOnFunction(F);
++      safestack_applied = true;
++      DEBUG(dbgs() << "[SafeStack]     safestack applied\n");
++    }
++
++    // If we applied safe stack, lets keep a flag on the module
++    if (safestack_applied)
++      M.addModuleFlag(M.Override, "SafeStack", 1);
++
++    return true;
++  }
++}; // class SafeStack
++
++bool SafeStack::doPassInitialization(Module &M) {
++  unsigned AddressSpace, Offset;
++  bool Changed = false;
++
++  // Check where the unsafe stack pointer is stored on this architecture
++  if (TLI->getUnsafeStackPtrLocation(AddressSpace, Offset)) {
++    // The unsafe stack pointer is stored at a fixed location
++    // (usually in the thread control block)
++    Constant *OffsetVal = ConstantInt::get(Int32Ty, Offset);
++    UnsafeStackPtr = ConstantExpr::getIntToPtr(OffsetVal,
++                        Int8Ty->getPointerTo()->getPointerTo(AddressSpace));
++  } else {
++    // The unsafe stack pointer is stored in a global variable with a magic name
++    // FIXME: share this constant between LLVM and compiler-rt
++    // FIXME: make the name start with "llvm."
++    static const char* unsafe_stack_ptr_var = "__safestack_unsafe_stack_ptr";
++
++    UnsafeStackPtr = dyn_cast_or_null<GlobalVariable>(
++          M.getNamedValue(unsafe_stack_ptr_var));
++
++    if (!UnsafeStackPtr) {
++      // The global variable is not defined yet, define it ourselves
++        UnsafeStackPtr = new GlobalVariable(
++              /*Module=*/ M, /*Type=*/ Int8Ty->getPointerTo(),
++              /*isConstant=*/ false, /*Linkage=*/ GlobalValue::ExternalLinkage,
++              /*Initializer=*/ 0, /*Name=*/ unsafe_stack_ptr_var);
++
++      cast<GlobalVariable>(UnsafeStackPtr)->setThreadLocal(true);
++
++      // TODO: should we place the unsafe stack ptr global in a special section?
++      // UnsafeStackPtr->setSection(".llvm.safestack");
++
++      Changed = true;
++    } else {
++      // The variable exists, check its type and attributes
++      if (UnsafeStackPtr->getType() != Int8Ty->getPointerTo()) {
++        report_fatal_error(Twine(unsafe_stack_ptr_var) +
++                           " must have void* type");
++      }
++
++      if (!cast<GlobalVariable>(UnsafeStackPtr)->isThreadLocal()) {
++        report_fatal_error(Twine(unsafe_stack_ptr_var) +
++                           " must be thread-local");
++      }
++
++      // TODO: check other attributes?
++    }
++  }
++
++  return Changed;
++}
++
++bool SafeStack::runOnFunction(Function &F) {
++  ++NumFunctions;
++
++  unsigned StackAlignment = TM->getFrameLowering()->getStackAlignment();
++
++  SmallVector<AllocaInst*, 16> StaticAllocas;
++  SmallVector<AllocaInst*, 4> DynamicAllocas;
++  SmallVector<ReturnInst*, 4> Returns;
++
++  // Collect all points where stack gets unwound and needs to be restored
++  // This is only necessary because the runtime (setjmp and unwind code) is
++  // not aware of the unsafe stack and won't unwind/restore it prorerly.
++  // To work around this problem without changing the runtime, we insert
++  // instrumentation to restore the unsafe stack pointer when necessary.
++  SmallVector<Instruction*, 4> StackRestorePoints;
++
++  // Find all static and dynamic alloca instructions that must be moved to the
++  // unsafe stack, all return instructions and stack restore points
++  for (inst_iterator It = inst_begin(&F), Ie = inst_end(&F); It != Ie; ++It) {
++    Instruction *I = &*It;
++
++    if (AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
++      ++NumAllocas;
++
++      if (AI->getMetadata(NoSafeStackMDKind) || IsSafeStackAlloca(AI))
++        continue;
++
++      if (AI->isStaticAlloca()) {
++        ++NumUnsafeStaticAllocas;
++        StaticAllocas.push_back(AI);
++      } else {
++        ++NumUnsafeDynamicAllocas;
++        DynamicAllocas.push_back(AI);
++      }
++
++    } else if (ReturnInst *RI = dyn_cast<ReturnInst>(I)) {
++      Returns.push_back(RI);
++
++    } else if (CallInst *CI = dyn_cast<CallInst>(I)) {
++      // setjmps require stack restore
++      if (CI->getCalledFunction() && CI->canReturnTwice())
++          //CI->getCalledFunction()->getName() == "_setjmp")
++        StackRestorePoints.push_back(CI);
++
++    } else if (LandingPadInst *LP = dyn_cast<LandingPadInst>(I)) {
++      // Excpetion landing pads require stack restore
++      StackRestorePoints.push_back(LP);
++    }
++  }
++
++  if (StaticAllocas.empty() && DynamicAllocas.empty() &&
++      StackRestorePoints.empty())
++    return false; // Nothing to do in this function
++
++  if (!StaticAllocas.empty() || !DynamicAllocas.empty())
++    ++NumUnsafeStackFunctions; // This function has the unsafe stack
++
++  if (!StackRestorePoints.empty())
++    ++NumUnsafeStackRestorePointsFunctions;
++
++  DIBuilder DIB(*F.getParent());
++  IRBuilder<> IRB(F.getEntryBlock().getFirstInsertionPt());
++
++  // The top of the unsafe stack after all unsafe static allocas are allocated
++  Value *StaticTop = NULL;
++
++  if (!StaticAllocas.empty()) {
++    // We explicitly compute and set the unsafe stack layout for all unsafe
++    // static alloca instructions. We save the unsafe "base pointer" in the
++    // prologue into a local variable and restore it in the epilogue.
++
++    // Load the current stack pointer (we'll also use it as a base pointer)
++    // FIXME: use a dedicated register for it ?
++    Instruction *BasePointer = IRB.CreateLoad(UnsafeStackPtr, false,
++                                              "unsafe_stack_ptr");
++    assert(BasePointer->getType() == StackPtrTy);
++
++    for (ReturnInst *RI : Returns) {
++      IRB.SetInsertPoint(RI);
++      IRB.CreateStore(BasePointer, UnsafeStackPtr);
++    }
++
++    // Compute maximum alignment among static objects on the unsafe stack
++    unsigned MaxAlignment = 0;
++    for (AllocaInst *AI : StaticAllocas) {
++      Type *Ty = AI->getAllocatedType();
++      unsigned Align =
++        std::max((unsigned)DL->getPrefTypeAlignment(Ty), AI->getAlignment());
++      if (Align > MaxAlignment)
++        MaxAlignment = Align;
++    }
++
++    if (MaxAlignment > StackAlignment) {
++      // Re-align the base pointer according to the max requested alignment
++      assert(isPowerOf2_32(MaxAlignment));
++      IRB.SetInsertPoint(cast<Instruction>(BasePointer->getNextNode()));
++      BasePointer = cast<Instruction>(IRB.CreateIntToPtr(
++          IRB.CreateAnd(IRB.CreatePtrToInt(BasePointer, IntPtrTy),
++                        ConstantInt::get(IntPtrTy, ~uint64_t(MaxAlignment-1))),
++          StackPtrTy));
++    }
++
++    // Allocate space for every unsafe static AllocaInst on the unsafe stack
++    int64_t StaticOffset = 0; // Current stack top
++    for (AllocaInst *AI : StaticAllocas) {
++      IRB.SetInsertPoint(AI);
++
++      ConstantInt *CArraySize = cast<ConstantInt>(AI->getArraySize());
++      Type *Ty = AI->getAllocatedType();
++
++      uint64_t Size = DL->getTypeAllocSize(Ty) * CArraySize->getZExtValue();
++      if (Size == 0) Size = 1; // Don't create zero-sized stack objects.
++
++      // Ensure the object is properly aligned
++      unsigned Align =
++        std::max((unsigned)DL->getPrefTypeAlignment(Ty), AI->getAlignment());
++
++      // Add alignment
++      // NOTE: we ensure that BasePointer itself is aligned to >= Align
++      StaticOffset += Size;
++      StaticOffset = (StaticOffset + Align - 1) / Align * Align;
++
++      Value *Off = IRB.CreateGEP(BasePointer, // BasePointer is i8*
++                      ConstantInt::get(Int32Ty, -StaticOffset));
++      Value *NewAI = IRB.CreateBitCast(Off, AI->getType(), AI->getName());
++      if (AI->hasName() && isa<Instruction>(NewAI))
++        cast<Instruction>(NewAI)->takeName(AI);
++
++      // Replace alloc with the new location
++      replaceDbgDeclareForAlloca(AI, NewAI, DIB);
++      replaceDbgValueForAlloca(AI, NewAI, DIB);
++      AI->replaceAllUsesWith(NewAI);
++      AI->eraseFromParent();
++    }
++
++    // Re-align BasePointer so that our callees would see it aligned as expected
++    // FIXME: no need to update BasePointer in leaf functions
++    StaticOffset = (StaticOffset + StackAlignment - 1)
++                    / StackAlignment * StackAlignment;
++
++    // Update shadow stack pointer in the function epilogue
++    IRB.SetInsertPoint(cast<Instruction>(BasePointer->getNextNode()));
++
++    StaticTop = IRB.CreateGEP(BasePointer,
++           ConstantInt::get(Int32Ty, -StaticOffset), "unsafe_stack_static_top");
++    IRB.CreateStore(StaticTop, UnsafeStackPtr);
++  }
++
++  IRB.SetInsertPoint(
++          StaticTop ? cast<Instruction>(StaticTop)->getNextNode()
++                    : (Instruction*) F.getEntryBlock().getFirstInsertionPt());
++
++  // Safe stack object that stores the current unsafe stack top. It is updated
++  // as unsafe dynamic (non-constant-sized) allocas are allocated and freed.
++  // This is only needed if we need to restore stack pointer after longjmp
++  // or exceptions.
++  // FIXME: a better alternative might be to store the unsafe stack pointer
++  // before setjmp / invoke instructions.
++  AllocaInst *DynamicTop = NULL;
++
++  if (!StackRestorePoints.empty()) {
++    // We need the current value of the shadow stack pointer to restore
++    // after longjmp or exception catching.
++
++    // FIXME: in the future, this should be handled by the longjmp/exception
++    // runtime itself
++
++    if (!DynamicAllocas.empty()) {
++      // If we also have dynamic alloca's, the stack pointer value changes
++      // throughout the function. For now we store it in an allca.
++      DynamicTop = IRB.CreateAlloca(StackPtrTy, 0, "unsafe_stack_dynamic_ptr");
++    }
++
++    if (!StaticTop) {
++      // We need to original unsafe stack pointer value, even if there are
++      // no unsafe static allocas
++      StaticTop = IRB.CreateLoad(UnsafeStackPtr, false, "unsafe_stack_ptr");
++    }
++
++    if (!DynamicAllocas.empty()) {
++      IRB.CreateStore(StaticTop, DynamicTop);
++    }
++  }
++
++  // Handle dynamic alloca now
++  for (AllocaInst *AI : DynamicAllocas) {
++    IRB.SetInsertPoint(AI);
++
++    // Compute the new SP value (after AI)
++    Value *ArraySize = AI->getArraySize();
++    if (ArraySize->getType() != IntPtrTy)
++      ArraySize = IRB.CreateIntCast(ArraySize, IntPtrTy, false);
++
++    Type *Ty = AI->getAllocatedType();
++    uint64_t TySize = DL->getTypeAllocSize(Ty);
++    Value *Size = IRB.CreateMul(ArraySize, ConstantInt::get(IntPtrTy, TySize));
++
++    Value *SP = IRB.CreatePtrToInt(IRB.CreateLoad(UnsafeStackPtr), IntPtrTy);
++    SP = IRB.CreateSub(SP, Size);
++
++    // Align the SP value to satisfy the AllocaInst, type and stack alignments
++    unsigned Align = std::max(
++      std::max((unsigned)DL->getPrefTypeAlignment(Ty), AI->getAlignment()),
++      (unsigned) StackAlignment);
++
++    assert(isPowerOf2_32(Align));
++    Value *NewTop = IRB.CreateIntToPtr(
++        IRB.CreateAnd(SP, ConstantInt::get(IntPtrTy, ~uint64_t(Align-1))),
++        StackPtrTy);
++
++    // Save the stack pointer
++    IRB.CreateStore(NewTop, UnsafeStackPtr);
++    if (DynamicTop) {
++      IRB.CreateStore(NewTop, DynamicTop);
++    }
++
++    Value *NewAI = IRB.CreateIntToPtr(SP, AI->getType());
++    if (AI->hasName() && isa<Instruction>(NewAI))
++      NewAI->takeName(AI);
++
++    replaceDbgDeclareForAlloca(AI, NewAI, DIB);
++    replaceDbgValueForAlloca(AI, NewAI, DIB);
++    AI->replaceAllUsesWith(NewAI);
++    AI->eraseFromParent();
++  }
++
++  if (!DynamicAllocas.empty()) {
++    // Now go through the instructions again, replacing stacksave/stackrestore
++    for (inst_iterator It = inst_begin(&F), Ie = inst_end(&F); It != Ie;) {
++      Instruction *I = &*(It++);
++      IntrinsicInst *II = dyn_cast<IntrinsicInst>(I);
++      if (!II)
++        continue;
++
++      if (II->getIntrinsicID() == Intrinsic::stacksave) {
++        IRB.SetInsertPoint(II);
++        Instruction *LI = IRB.CreateLoad(UnsafeStackPtr);
++        LI->takeName(II);
++        II->replaceAllUsesWith(LI);
++        II->eraseFromParent();
++      } else if (II->getIntrinsicID() == Intrinsic::stackrestore) {
++        IRB.SetInsertPoint(II);
++        Instruction *SI = IRB.CreateStore(II->getArgOperand(0), UnsafeStackPtr);
++        SI->takeName(II);
++        assert(II->use_empty());
++        II->eraseFromParent();
++      }
++    }
++  }
++
++  // Restore current stack pointer after longjmp/exception catch
++  for (Instruction *I : StackRestorePoints) {
++    ++NumUnsafeStackRestorePoints;
++
++    IRB.SetInsertPoint(cast<Instruction>(I->getNextNode()));
++    Value *CurrentTop = DynamicTop ? IRB.CreateLoad(DynamicTop) : StaticTop;
++    IRB.CreateStore(CurrentTop, UnsafeStackPtr);
++  }
++
++  return true;
++}
++
++} // end anonymous namespace
++
++char SafeStack::ID = 0;
++INITIALIZE_PASS(SafeStack, "safe-stack",
++                "Safe Stack instrumentation pass", false, false)
++
++Pass *llvm::createSafeStackPass(const TargetMachine *TM) {
++  return new SafeStack(TM);
++}
+diff --git lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+index c07b5e6..f63c99d 100644
+--- lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
++++ lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp
+@@ -4645,6 +4645,31 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
+     // By default, turn this into a target intrinsic node.
+     visitTargetIntrinsic(I, Intrinsic);
+     return nullptr;
++  case Intrinsic::safestack_get_usp: {
++    Value* PtrVal = TLI->getUnsafeStackPtr(I.getContext());
++    SDValue Ptr = getValue(PtrVal);
++    SDValue Root = DAG.getRoot();
++    SDValue V = DAG.getLoad(TLI->getPointerTy(), sdl, Root, Ptr,
++                            MachinePointerInfo(PtrVal),
++                            false /* volatile */,
++                            false /* nontemporal */,
++                            false /* isinvariant */,
++                            1 /* align */);
++    setValue(&I, V);
++    return nullptr;
++  }
++  case Intrinsic::safestack_set_usp: {
++    Value* PtrVal = TLI->getUnsafeStackPtr(I.getContext());
++    SDValue Ptr = getValue(PtrVal);
++    SDValue Root = DAG.getRoot();
++    SDValue Arg0 = getValue(I.getArgOperand(0));
++    SDValue V = DAG.getStore(Root, sdl, Arg0, Ptr, MachinePointerInfo(PtrVal),
++                             false /* volatile */,
++                             false /* nontemporal */,
++                             1 /* alignment */);
++    DAG.setRoot(V);
++    return nullptr;
++  }
+   case Intrinsic::vastart:  visitVAStart(I); return nullptr;
+   case Intrinsic::vaend:    visitVAEnd(I); return nullptr;
+   case Intrinsic::vacopy:   visitVACopy(I); return nullptr;
+diff --git lib/IR/Attributes.cpp lib/IR/Attributes.cpp
+index 04545ea..89bd83b 100644
+--- lib/IR/Attributes.cpp
++++ lib/IR/Attributes.cpp
+@@ -237,6 +237,8 @@ std::string Attribute::getAsString(bool InAttrGrp) const {
+     return "sspreq";
+   if (hasAttribute(Attribute::StackProtectStrong))
+     return "sspstrong";
++  if (hasAttribute(Attribute::SafeStack))
++    return "safestack";
+   if (hasAttribute(Attribute::StructRet))
+     return "sret";
+   if (hasAttribute(Attribute::SanitizeThread))
+@@ -426,6 +428,7 @@ uint64_t AttributeImpl::getAttrMask(Attribute::AttrKind Val) {
+   case Attribute::InAlloca:        return 1ULL << 43;
+   case Attribute::NonNull:         return 1ULL << 44;
+   case Attribute::JumpTable:       return 1ULL << 45;
++  case Attribute::SafeStack:       return 1ULL << 46;
+   case Attribute::Dereferenceable:
+     llvm_unreachable("dereferenceable attribute not supported in raw format");
+   }
+diff --git lib/IR/Verifier.cpp lib/IR/Verifier.cpp
+index 9cf911b..05def56 100644
+--- lib/IR/Verifier.cpp
++++ lib/IR/Verifier.cpp
+@@ -758,6 +758,7 @@ void Verifier::VerifyAttributeTypes(AttributeSet Attrs, unsigned Idx,
+         I->getKindAsEnum() == Attribute::StackProtect ||
+         I->getKindAsEnum() == Attribute::StackProtectReq ||
+         I->getKindAsEnum() == Attribute::StackProtectStrong ||
++        I->getKindAsEnum() == Attribute::SafeStack ||
+         I->getKindAsEnum() == Attribute::NoRedZone ||
+         I->getKindAsEnum() == Attribute::NoImplicitFloat ||
+         I->getKindAsEnum() == Attribute::Naked ||
+diff --git lib/MC/MCAsmStreamer.cpp lib/MC/MCAsmStreamer.cpp
+old mode 100644
+new mode 100755
+index 14f0f05..9535371
+--- lib/MC/MCAsmStreamer.cpp
++++ lib/MC/MCAsmStreamer.cpp
+@@ -117,7 +117,7 @@ public:
+
+   void ChangeSection(const MCSection *Section,
+                      const MCExpr *Subsection) override;
+-
++  void EmitSafeStackNote() override;
+   void EmitLOHDirective(MCLOHType Kind, const MCLOHArgs &Args) override;
+   void EmitLabel(MCSymbol *Symbol) override;
+
+@@ -379,6 +379,11 @@ void MCAsmStreamer::EmitVersionMin(MCVersionMinType Kind, unsigned Major,
+   EmitEOL();
+ }
+
++void MCAsmStreamer::EmitSafeStackNote() {
++  OS << "\t.section\t\".note.SafeStack\",\"\",@note";
++  EmitEOL();
++}
++
+ void MCAsmStreamer::EmitThumbFunc(MCSymbol *Func) {
+   // This needs to emit to a temporary string to get properly quoted
+   // MCSymbols when they have spaces in them.
+diff --git lib/MC/MCELFStreamer.cpp lib/MC/MCELFStreamer.cpp
+old mode 100644
+new mode 100755
+index 7c70540..8a68795
+--- lib/MC/MCELFStreamer.cpp
++++ lib/MC/MCELFStreamer.cpp
+@@ -53,6 +53,21 @@ void MCELFStreamer::InitSections() {
+   SwitchSection(getContext().getObjectFileInfo()->getTextSection());
+ }
+
++void MCELFStreamer::EmitSafeStackNote() {
++  static const char NoteName[] = ".note.SafeStack";
++  static const char NoteNamespace[] = "SafeStack";
++  const MCSection *Note = getContext().getELFSection(
++              NoteName, ELF::SHT_NOTE, 0, SectionKind::getMetadata());
++  PushSection();
++  SwitchSection(Note);
++  EmitIntValue(sizeof (NoteNamespace), 4); // namesz
++  EmitIntValue(0, 4);                      // descsz
++  EmitIntValue(0, 4);                      // type
++  EmitBytes(StringRef(NoteNamespace, sizeof (NoteNamespace))); // includes '\0'
++  EmitValueToAlignment(4, 0, 1, 0);
++  PopSection();
++}
++
+ void MCELFStreamer::EmitLabel(MCSymbol *Symbol) {
+   assert(Symbol->isUndefined() && "Cannot define a symbol twice!");
+
+@@ -549,6 +564,7 @@ MCStreamer *llvm::createELFStreamer(MCContext &Context, MCAsmBackend &MAB,
+     S->getAssembler().setRelaxAll(true);
+   if (NoExecStack)
+     S->getAssembler().setNoExecStack(true);
++
+   return S;
+ }
+
+diff --git lib/Target/CppBackend/CPPBackend.cpp lib/Target/CppBackend/CPPBackend.cpp
+index f610fbb..5589f69 100644
+--- lib/Target/CppBackend/CPPBackend.cpp
++++ lib/Target/CppBackend/CPPBackend.cpp
+@@ -510,6 +510,7 @@ void CppWriter::printAttributes(const AttributeSet &PAL,
+       HANDLE_ATTR(StackProtect);
+       HANDLE_ATTR(StackProtectReq);
+       HANDLE_ATTR(StackProtectStrong);
++      HANDLE_ATTR(SafeStack);
+       HANDLE_ATTR(NoCapture);
+       HANDLE_ATTR(NoRedZone);
+       HANDLE_ATTR(NoImplicitFloat);
+diff --git lib/Target/X86/X86ISelLowering.cpp lib/Target/X86/X86ISelLowering.cpp
+old mode 100644
+new mode 100755
+index 3a2cb6b..0c5f766
+--- lib/Target/X86/X86ISelLowering.cpp
++++ lib/Target/X86/X86ISelLowering.cpp
+@@ -1848,6 +1848,48 @@ bool X86TargetLowering::getStackCookieLocation(unsigned &AddressSpace,
+   return true;
+ }
+
++bool X86TargetLowering::getUnsafeStackPtrLocation(unsigned &AddressSpace,
++                                                  unsigned &Offset) const {
++  if (Subtarget->isTargetDarwin() &&
++      getTargetMachine().getCodeModel() != CodeModel::Kernel) {
++    /* On Darwin, we store the unsafe stack pointer in one of the
++     * thread-specific data slots that are reserved for system libraries.
++     * Such data slots are directly accessible through the %gs segment, and
++     * are described in detail in pthreads/pthread_machdep.h in Darwin Libc.
++     * As of Libc-825, slots 0 - 255 are reserved, but only slots 0 - 119
++     * are actually used. We use slot 192, which is accessible as
++     * %gs:(192 * sizeof(void*))
++     */
++    AddressSpace = 256;
++    Offset = 192 * (Subtarget->getDataLayout()->getPointerSize());
++    return true;
++  }
++
++  /* TODO: To make accessing the unsafe stack pointer faster, we plan to
++   * eventually store it directly in the thread control block data structure on
++   * platforms where this structure is pointed to by %fs or %gs. This is exactly
++   * the same mechanism as currently being used by the traditional stack
++   * protector pass to store the stack guard (see getStackCookieLocation()
++   * function above). Doing so requires changing the tcbhead_t struct in glibc
++   * on Linux and tcb struct in libc on FreeBSD.
++   */
++  if (Subtarget->isTargetFreeBSD() &&
++      getTargetMachine().getCodeModel() != CodeModel::Kernel) {
++    if (Subtarget->is32Bit())
++      AddressSpace = 256; // X86::GS;
++    else if (Subtarget->is64Bit())
++      AddressSpace = 257; // X86::FS;
++    else
++      return false;
++    Offset = 3 * (Subtarget->getDataLayout()->getPointerSize());
++    return true;
++  }
++
++  // By default, the unsafe stack pointer will be stored in a thread-local
++  // variable with a predefined name.
++  return false;
++}
++
+ bool X86TargetLowering::isNoopAddrSpaceCast(unsigned SrcAS,
+                                             unsigned DestAS) const {
+   assert(SrcAS != DestAS && "Expected different address spaces!");
+diff --git lib/Target/X86/X86ISelLowering.h lib/Target/X86/X86ISelLowering.h
+index c8cdce7..e097bc3 100644
+--- lib/Target/X86/X86ISelLowering.h
++++ lib/Target/X86/X86ISelLowering.h
+@@ -788,6 +788,12 @@ namespace llvm {
+     bool getStackCookieLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const override;
+
++    /// Return true if the target stores unsafe stack pointer at a fixed offset
++    /// in some non-standard address space, and populates the address space and
++    /// offset as appropriate.
++    virtual bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
++                                           unsigned &Offset) const;
++
+     SDValue BuildFILD(SDValue Op, EVT SrcVT, SDValue Chain, SDValue StackSlot,
+                       SelectionDAG &DAG) const;
+
+diff --git lib/Transforms/IPO/Inliner.cpp lib/Transforms/IPO/Inliner.cpp
+index 9087ab2..bf63290 100644
+--- lib/Transforms/IPO/Inliner.cpp
++++ lib/Transforms/IPO/Inliner.cpp
+@@ -89,7 +89,8 @@ static void AdjustCallerSSPLevel(Function *Caller, Function *Callee) {
+   // clutter to the IR.
+   AttrBuilder B;
+   B.addAttribute(Attribute::StackProtect)
+-    .addAttribute(Attribute::StackProtectStrong);
++    .addAttribute(Attribute::StackProtectStrong)
++    .addAttribute(Attribute::StackProtectReq);
+   AttributeSet OldSSPAttr = AttributeSet::get(Caller->getContext(),
+                                               AttributeSet::FunctionIndex,
+                                               B);
+@@ -97,18 +98,28 @@ static void AdjustCallerSSPLevel(Function *Caller, Function *Callee) {
+                CalleeAttr = Callee->getAttributes();
+
+   if (CalleeAttr.hasAttribute(AttributeSet::FunctionIndex,
+-                              Attribute::StackProtectReq)) {
++                              Attribute::SafeStack)) {
++    Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
++    Caller->addFnAttr(Attribute::SafeStack);
++  } else if (CalleeAttr.hasAttribute(AttributeSet::FunctionIndex,
++                                     Attribute::StackProtectReq) &&
++             !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
++                                      Attribute::SafeStack)) {
+     Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
+     Caller->addFnAttr(Attribute::StackProtectReq);
+   } else if (CalleeAttr.hasAttribute(AttributeSet::FunctionIndex,
+                                      Attribute::StackProtectStrong) &&
+              !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
++                                      Attribute::SafeStack) &&
++             !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
+                                       Attribute::StackProtectReq)) {
+     Caller->removeAttributes(AttributeSet::FunctionIndex, OldSSPAttr);
+     Caller->addFnAttr(Attribute::StackProtectStrong);
+   } else if (CalleeAttr.hasAttribute(AttributeSet::FunctionIndex,
+                                      Attribute::StackProtect) &&
+            !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
++                                    Attribute::SafeStack) &&
++           !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
+                                     Attribute::StackProtectReq) &&
+            !CallerAttr.hasAttribute(AttributeSet::FunctionIndex,
+                                     Attribute::StackProtectStrong))
+diff --git lib/Transforms/Utils/Local.cpp lib/Transforms/Utils/Local.cpp
+index a5e443f..5f43c0a 100644
+--- lib/Transforms/Utils/Local.cpp
++++ lib/Transforms/Utils/Local.cpp
+@@ -1123,6 +1123,33 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+   return true;
+ }
+
++bool llvm::replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
++                                    DIBuilder &Builder) {
++  MDNode *DebugNode = MDNode::getIfExists(AI->getContext(), AI);
++  if (!DebugNode)
++    return false;
++
++  SmallVector<DbgValueInst*, 16> DVIs;
++  for (User *U : DebugNode->users()) {
++    if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(U))
++      DVIs.push_back(DVI);
++  }
++
++  for (DbgValueInst *DVI: DVIs) {
++    assert(DVI->getValue() == AI);
++
++    uint64_t DIOffset = DVI->getOffset();
++    DIVariable DIVar(DVI->getVariable());
++
++    // Insert llvm.dbg.value right next to the original llvm.dbg.value and
++    // remove the original one.
++    Builder.insertDbgValueIntrinsic(NewAllocaAddress, DIOffset, DIVar, DVI);
++    DVI->eraseFromParent();
++  }
++
++  return true;
++}
++
+ /// changeToUnreachable - Insert an unreachable instruction before the specified
+ /// instruction, making it and the rest of the code in the block dead.
+ static void changeToUnreachable(Instruction *I, bool UseLLVMTrap) {
+diff --git test/CodeGen/X86/safestack.ll test/CodeGen/X86/safestack.ll
+new file mode 100644
+index 0000000..1704440
+--- /dev/null
++++ test/CodeGen/X86/safestack.ll
+@@ -0,0 +1,1515 @@
++; RUN: llc -mtriple=i386-pc-linux-gnu < %s -o - | FileCheck --check-prefix=LINUX-I386 %s
++; RUN: llc -mtriple=x86_64-pc-linux-gnu < %s -o - | FileCheck --check-prefix=LINUX-X64 %s
++; RUN: llc -mtriple=x86_64-apple-darwin < %s -o - >/tmp/x
++; RUN: llc -mtriple=x86_64-apple-darwin < %s -o - | FileCheck --check-prefix=DARWIN-X64 %s
++; RUN: llc -mtriple=i386-unknown-freebsd10.1 < %s -o - | FileCheck --check-prefix=FREEBSD-I386 %s
++; RUN: llc -mtriple=x86_64-unknown-freebsd10.1 < %s -o - | FileCheck --check-prefix=FREEBSD-X64 %s
++
++%struct.foo = type { [16 x i8] }
++%struct.foo.0 = type { [4 x i8] }
++%struct.pair = type { i32, i32 }
++%struct.nest = type { %struct.pair, %struct.pair }
++%struct.vec = type { <4 x i32> }
++%class.A = type { [2 x i8] }
++%struct.deep = type { %union.anon }
++%union.anon = type { %struct.anon }
++%struct.anon = type { %struct.anon.0 }
++%struct.anon.0 = type { %union.anon.1 }
++%union.anon.1 = type { [2 x i8] }
++%struct.small = type { i8 }
++
++@.str = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
++
++; test1a: array of [16 x i8]
++;         no safestack attribute
++; Requires no protector.
++define void @test1a(i8* %a) nounwind uwtable {
++entry:
++; LINUX-I386: test1a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test1a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test1a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %buf = alloca [16 x i8], align 16
++  store i8* %a, i8** %a.addr, align 8
++  %arraydecay = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %arraydecay1 = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay1)
++  ret void
++}
++
++; test1b: array of [16 x i8]
++;         safestack attribute
++; Requires protector.
++define void @test1b(i8* %a) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test1b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test1b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test1b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++
++; FREEBSD-I386: test1b:
++; FREEBSD-I386: movl %gs:12
++; FREEBSD-I386: .cfi_endproc
++
++; FREEBSD-X64: test1b:
++; FREEBSD-X64: movq %fs:24
++; FREEBSD-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %buf = alloca [16 x i8], align 16
++  store i8* %a, i8** %a.addr, align 8
++  %arraydecay = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %arraydecay1 = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay1)
++  ret void
++}
++
++; test2a: struct { [16 x i8] }
++;         no safestack attribute
++; Requires no protector.
++define void @test2a(i8* %a) nounwind uwtable {
++entry:
++; LINUX-I386: test2a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test2a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test2a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %b = alloca %struct.foo, align 1
++  store i8* %a, i8** %a.addr, align 8
++  %buf = getelementptr inbounds %struct.foo* %b, i32 0, i32 0
++  %arraydecay = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %buf1 = getelementptr inbounds %struct.foo* %b, i32 0, i32 0
++  %arraydecay2 = getelementptr inbounds [16 x i8]* %buf1, i32 0, i32 0
++  %call3 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay2)
++  ret void
++}
++
++; test2b: struct { [16 x i8] }
++;          safestack attribute
++; Requires protector.
++define void @test2b(i8* %a) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test2b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test2b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test2b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %b = alloca %struct.foo, align 1
++  store i8* %a, i8** %a.addr, align 8
++  %buf = getelementptr inbounds %struct.foo* %b, i32 0, i32 0
++  %arraydecay = getelementptr inbounds [16 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %buf1 = getelementptr inbounds %struct.foo* %b, i32 0, i32 0
++  %arraydecay2 = getelementptr inbounds [16 x i8]* %buf1, i32 0, i32 0
++  %call3 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay2)
++  ret void
++}
++
++; test3a:  array of [4 x i8]
++;          no safestack attribute
++; Requires no protector.
++define void @test3a(i8* %a) nounwind uwtable {
++entry:
++; LINUX-I386: test3a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test3a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test3a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %buf = alloca [4 x i8], align 1
++  store i8* %a, i8** %a.addr, align 8
++  %arraydecay = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %arraydecay1 = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay1)
++  ret void
++}
++
++; test3b:  array [4 x i8]
++;          safestack attribute
++; Requires protector.
++define void @test3b(i8* %a) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test3b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test3b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test3b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %buf = alloca [4 x i8], align 1
++  store i8* %a, i8** %a.addr, align 8
++  %arraydecay = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %arraydecay1 = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay1)
++  ret void
++}
++
++; test4a:  struct { [4 x i8] }
++;          no safestack attribute
++; Requires no protector.
++define void @test4a(i8* %a) nounwind uwtable {
++entry:
++; LINUX-I386: test4a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test4a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test4a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %b = alloca %struct.foo.0, align 1
++  store i8* %a, i8** %a.addr, align 8
++  %buf = getelementptr inbounds %struct.foo.0* %b, i32 0, i32 0
++  %arraydecay = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %buf1 = getelementptr inbounds %struct.foo.0* %b, i32 0, i32 0
++  %arraydecay2 = getelementptr inbounds [4 x i8]* %buf1, i32 0, i32 0
++  %call3 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay2)
++  ret void
++}
++
++; test4b:  struct { [4 x i8] }
++;          safestack attribute
++; Requires protector.
++define void @test4b(i8* %a) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test4b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test4b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test4b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  %b = alloca %struct.foo.0, align 1
++  store i8* %a, i8** %a.addr, align 8
++  %buf = getelementptr inbounds %struct.foo.0* %b, i32 0, i32 0
++  %arraydecay = getelementptr inbounds [4 x i8]* %buf, i32 0, i32 0
++  %0 = load i8** %a.addr, align 8
++  %call = call i8* @strcpy(i8* %arraydecay, i8* %0)
++  %buf1 = getelementptr inbounds %struct.foo.0* %b, i32 0, i32 0
++  %arraydecay2 = getelementptr inbounds [4 x i8]* %buf1, i32 0, i32 0
++  %call3 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %arraydecay2)
++  ret void
++}
++
++; test5a:  no arrays / no nested arrays
++;          no safestack attribute
++; Requires no protector.
++define void @test5a(i8* %a) nounwind uwtable {
++entry:
++; LINUX-I386: test5a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test5a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test5a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  store i8* %a, i8** %a.addr, align 8
++  %0 = load i8** %a.addr, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %0)
++  ret void
++}
++
++; test5b:  no arrays / no nested arrays
++;          safestack attribute
++; Requires no protector.
++define void @test5b(i8* %a) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test5b:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test5b:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test5b:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a.addr = alloca i8*, align 8
++  store i8* %a, i8** %a.addr, align 8
++  %0 = load i8** %a.addr, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i8* %0)
++  ret void
++}
++
++; test6a:  Address-of local taken (j = &a)
++;          no safestack attribute
++; Requires no protector.
++define void @test6a() nounwind uwtable {
++entry:
++; LINUX-I386: test6a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test6a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test6a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %retval = alloca i32, align 4
++  %a = alloca i32, align 4
++  %j = alloca i32*, align 8
++  store i32 0, i32* %retval
++  %0 = load i32* %a, align 4
++  %add = add nsw i32 %0, 1
++  store i32 %add, i32* %a, align 4
++  store i32* %a, i32** %j, align 8
++  ret void
++}
++
++; test6b:  Address-of local taken (j = &a)
++;          safestack attribute
++; Requires protector.
++define void @test6b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test6b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test6b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test6b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %retval = alloca i32, align 4
++  %a = alloca i32, align 4
++  %j = alloca i32*, align 8
++  store i32 0, i32* %retval
++  %0 = load i32* %a, align 4
++  %add = add nsw i32 %0, 1
++  store i32 %add, i32* %a, align 4
++  store i32* %a, i32** %j, align 8
++  ret void
++}
++
++; test7a:  PtrToInt Cast
++;          no safestack attribute
++; Requires no protector.
++define void @test7a() nounwind uwtable readnone {
++entry:
++; LINUX-I386: test7a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test7a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test7a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %0 = ptrtoint i32* %a to i64
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i64 %0)
++  ret void
++}
++
++; test7b:  PtrToInt Cast
++;          safestack attribute
++; Requires no protector.
++define void @test7b() nounwind uwtable readnone safestack {
++entry:
++; LINUX-I386: test7b:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test7b:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test7b:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %0 = ptrtoint i32* %a to i64
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i64 %0)
++  ret void
++}
++
++; test8a:  Passing addr-of to function call
++;          no safestack attribute
++; Requires no protector.
++define void @test8a() nounwind uwtable {
++entry:
++; LINUX-I386: test8a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test8a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test8a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %b = alloca i32, align 4
++  call void @funcall(i32* %b) nounwind
++  ret void
++}
++
++; test8b:  Passing addr-of to function call
++;          safestack attribute
++; Requires protector.
++define void @test8b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test8b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test8b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test8b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %b = alloca i32, align 4
++  call void @funcall(i32* %b) nounwind
++  ret void
++}
++
++; test9a:  Addr-of in select instruction
++;          no safestack attribute
++; Requires no protector.
++define void @test9a() nounwind uwtable {
++entry:
++; LINUX-I386: test9a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test9a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test9a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %x = alloca double, align 8
++  %call = call double @testi_aux() nounwind
++  store double %call, double* %x, align 8
++  %cmp2 = fcmp ogt double %call, 0.000000e+00
++  %y.1 = select i1 %cmp2, double* %x, double* null
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), double* %y.1)
++  ret void
++}
++
++; test9b:  Addr-of in select instruction
++;          safestack attribute
++; Requires protector.
++define void @test9b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test9b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test9b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test9b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %x = alloca double, align 8
++  %call = call double @testi_aux() nounwind
++  store double %call, double* %x, align 8
++  %cmp2 = fcmp ogt double %call, 0.000000e+00
++  %y.1 = select i1 %cmp2, double* %x, double* null
++  %call2 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), double* %y.1)
++  ret void
++}
++
++; test10a: Addr-of in phi instruction
++;          no safestack attribute
++; Requires no protector.
++define void @test10a() nounwind uwtable {
++entry:
++; LINUX-I386: test10a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test10a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test10a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %x = alloca double, align 8
++  %call = call double @testi_aux() nounwind
++  store double %call, double* %x, align 8
++  %cmp = fcmp ogt double %call, 3.140000e+00
++  br i1 %cmp, label %if.then, label %if.else
++
++if.then:                                          ; preds = %entry
++  %call1 = call double @testi_aux() nounwind
++  store double %call1, double* %x, align 8
++  br label %if.end4
++
++if.else:                                          ; preds = %entry
++  %cmp2 = fcmp ogt double %call, 1.000000e+00
++  br i1 %cmp2, label %if.then3, label %if.end4
++
++if.then3:                                         ; preds = %if.else
++  br label %if.end4
++
++if.end4:                                          ; preds = %if.else, %if.then3, %if.then
++  %y.0 = phi double* [ null, %if.then ], [ %x, %if.then3 ], [ null, %if.else ]
++  %call5 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), double* %y.0) nounwind
++  ret void
++}
++
++; test10b: Addr-of in phi instruction
++;          safestack attribute
++; Requires protector.
++define void @test10b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test10b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test10b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test10b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %x = alloca double, align 8
++  %call = call double @testi_aux() nounwind
++  store double %call, double* %x, align 8
++  %cmp = fcmp ogt double %call, 3.140000e+00
++  br i1 %cmp, label %if.then, label %if.else
++
++if.then:                                          ; preds = %entry
++  %call1 = call double @testi_aux() nounwind
++  store double %call1, double* %x, align 8
++  br label %if.end4
++
++if.else:                                          ; preds = %entry
++  %cmp2 = fcmp ogt double %call, 1.000000e+00
++  br i1 %cmp2, label %if.then3, label %if.end4
++
++if.then3:                                         ; preds = %if.else
++  br label %if.end4
++
++if.end4:                                          ; preds = %if.else, %if.then3, %if.then
++  %y.0 = phi double* [ null, %if.then ], [ %x, %if.then3 ], [ null, %if.else ]
++  %call5 = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), double* %y.0) nounwind
++  ret void
++}
++
++; test11a: Addr-of struct element. (GEP followed by store).
++;          no safestack attribute
++; Requires no protector.
++define void @test11a() nounwind uwtable {
++entry:
++; LINUX-I386: test11a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test11a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test11a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %b = alloca i32*, align 8
++  %y = getelementptr inbounds %struct.pair* %c, i32 0, i32 1
++  store i32* %y, i32** %b, align 8
++  %0 = load i32** %b, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i32* %0)
++  ret void
++}
++
++; test11b: Addr-of struct element. (GEP followed by store).
++;          safestack attribute
++; Requires protector.
++define void @test11b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test11b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test11b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test11b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %b = alloca i32*, align 8
++  %y = getelementptr inbounds %struct.pair* %c, i32 0, i32 1
++  store i32* %y, i32** %b, align 8
++  %0 = load i32** %b, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i32* %0)
++  ret void
++}
++
++; test12a: Addr-of struct element, GEP followed by ptrtoint.
++;          no safestack attribute
++; Requires no protector.
++define void @test12a() nounwind uwtable {
++entry:
++; LINUX-I386: test12a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test12a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test12a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %b = alloca i32*, align 8
++  %y = getelementptr inbounds %struct.pair* %c, i32 0, i32 1
++  %0 = ptrtoint i32* %y to i64
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i64 %0)
++  ret void
++}
++
++; test12b: Addr-of struct element, GEP followed by ptrtoint.
++;          safestack attribute
++; Requires protector.
++define void @test12b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test12b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test12b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test12b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %b = alloca i32*, align 8
++  %y = getelementptr inbounds %struct.pair* %c, i32 0, i32 1
++  %0 = ptrtoint i32* %y to i64
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i64 %0)
++  ret void
++}
++
++; test13a: Addr-of struct element, GEP followed by callinst.
++;          no safestack attribute
++; Requires no protector.
++define void @test13a() nounwind uwtable {
++entry:
++; LINUX-I386: test13a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test13a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test13a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %y = getelementptr inbounds %struct.pair* %c, i64 0, i32 1
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), i32* %y) nounwind
++  ret void
++}
++
++; test13b: Addr-of struct element, GEP followed by callinst.
++;          safestack attribute
++; Requires protector.
++define void @test13b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test13b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test13b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test13b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %y = getelementptr inbounds %struct.pair* %c, i64 0, i32 1
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), i32* %y) nounwind
++  ret void
++}
++
++; test14a: Addr-of a local, optimized into a GEP (e.g., &a - 12)
++;          no safestack attribute
++; Requires no protector.
++define void @test14a() nounwind uwtable {
++entry:
++; LINUX-I386: test14a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test14a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test14a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %add.ptr5 = getelementptr inbounds i32* %a, i64 -12
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), i32* %add.ptr5) nounwind
++  ret void
++}
++
++; test14b: Addr-of a local, optimized into a GEP (e.g., &a - 12)
++;          safestack attribute
++; Requires protector.
++define void @test14b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test14b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test14b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test14b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %add.ptr5 = getelementptr inbounds i32* %a, i64 -12
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), i32* %add.ptr5) nounwind
++  ret void
++}
++
++; test15a: Addr-of a local cast to a ptr of a different type
++;           (e.g., int a; ... ; float *b = &a;)
++;          no safestack attribute
++; Requires no protector.
++define void @test15a() nounwind uwtable {
++entry:
++; LINUX-I386: test15a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test15a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test15a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %b = alloca float*, align 8
++  store i32 0, i32* %a, align 4
++  %0 = bitcast i32* %a to float*
++  store float* %0, float** %b, align 8
++  %1 = load float** %b, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), float* %1)
++  ret void
++}
++
++; test15b: Addr-of a local cast to a ptr of a different type
++;           (e.g., int a; ... ; float *b = &a;)
++;          safestack attribute
++; Requires protector.
++define void @test15b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test15b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test15b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test15b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %b = alloca float*, align 8
++  store i32 0, i32* %a, align 4
++  %0 = bitcast i32* %a to float*
++  store float* %0, float** %b, align 8
++  %1 = load float** %b, align 8
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), float* %1)
++  ret void
++}
++
++; test16a: Addr-of a local cast to a ptr of a different type (optimized)
++;           (e.g., int a; ... ; float *b = &a;)
++;          no safestack attribute
++; Requires no protector.
++define void @test16a() nounwind uwtable {
++entry:
++; LINUX-I386: test16a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test16a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test16a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  store i32 0, i32* %a, align 4
++  %0 = bitcast i32* %a to float*
++  call void @funfloat(float* %0) nounwind
++  ret void
++}
++
++; test16b: Addr-of a local cast to a ptr of a different type (optimized)
++;           (e.g., int a; ... ; float *b = &a;)
++;          safestack attribute
++; Requires protector.
++define void @test16b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test16b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test16b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test16b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  store i32 0, i32* %a, align 4
++  %0 = bitcast i32* %a to float*
++  call void @funfloat(float* %0) nounwind
++  ret void
++}
++
++; test17a: Addr-of a vector nested in a struct
++;          no safestack attribute
++; Requires no protector.
++define void @test17a() nounwind uwtable {
++entry:
++; LINUX-I386: test17a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test17a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test17a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.vec, align 16
++  %y = getelementptr inbounds %struct.vec* %c, i64 0, i32 0
++  %add.ptr = getelementptr inbounds <4 x i32>* %y, i64 -12
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), <4 x i32>* %add.ptr) nounwind
++  ret void
++}
++
++; test17b: Addr-of a vector nested in a struct
++;          safestack attribute
++; Requires protector.
++define void @test17b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test17b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test17b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test17b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.vec, align 16
++  %y = getelementptr inbounds %struct.vec* %c, i64 0, i32 0
++  %add.ptr = getelementptr inbounds <4 x i32>* %y, i64 -12
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i64 0, i64 0), <4 x i32>* %add.ptr) nounwind
++  ret void
++}
++
++; test18a: Addr-of a variable passed into an invoke instruction.
++;          no safestack attribute
++; Requires no protector.
++define i32 @test18a() uwtable {
++entry:
++; LINUX-I386: test18a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test18a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test18a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %exn.slot = alloca i8*
++  %ehselector.slot = alloca i32
++  store i32 0, i32* %a, align 4
++  invoke void @_Z3exceptPi(i32* %a)
++          to label %invoke.cont unwind label %lpad
++
++invoke.cont:
++  ret i32 0
++
++lpad:
++  %0 = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
++          catch i8* null
++  ret i32 0
++}
++
++; test18b: Addr-of a variable passed into an invoke instruction.
++;          safestack attribute
++; Requires protector.
++define i32 @test18b() uwtable safestack {
++entry:
++; LINUX-I386: test18b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test18b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test18b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32, align 4
++  %exn.slot = alloca i8*
++  %ehselector.slot = alloca i32
++  store i32 0, i32* %a, align 4
++  invoke void @_Z3exceptPi(i32* %a)
++          to label %invoke.cont unwind label %lpad
++
++invoke.cont:
++  ret i32 0
++
++lpad:
++  %0 = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
++          catch i8* null
++  ret i32 0
++}
++
++; test19a: Addr-of a struct element passed into an invoke instruction.
++;           (GEP followed by an invoke)
++;          no safestack attribute
++; Requires no protector.
++define i32 @test19a() uwtable {
++entry:
++; LINUX-I386: test19a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test19a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test19a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %exn.slot = alloca i8*
++  %ehselector.slot = alloca i32
++  %a = getelementptr inbounds %struct.pair* %c, i32 0, i32 0
++  store i32 0, i32* %a, align 4
++  %a1 = getelementptr inbounds %struct.pair* %c, i32 0, i32 0
++  invoke void @_Z3exceptPi(i32* %a1)
++          to label %invoke.cont unwind label %lpad
++
++invoke.cont:
++  ret i32 0
++
++lpad:
++  %0 = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
++          catch i8* null
++  ret i32 0
++}
++
++; test19b: Addr-of a struct element passed into an invoke instruction.
++;           (GEP followed by an invoke)
++;          safestack attribute
++; Requires protector.
++define i32 @test19b() uwtable safestack {
++entry:
++; LINUX-I386: test19b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test19b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test19b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.pair, align 4
++  %exn.slot = alloca i8*
++  %ehselector.slot = alloca i32
++  %a = getelementptr inbounds %struct.pair* %c, i32 0, i32 0
++  store i32 0, i32* %a, align 4
++  %a1 = getelementptr inbounds %struct.pair* %c, i32 0, i32 0
++  invoke void @_Z3exceptPi(i32* %a1)
++          to label %invoke.cont unwind label %lpad
++
++invoke.cont:
++  ret i32 0
++
++lpad:
++  %0 = landingpad { i8*, i32 } personality i8* bitcast (i32 (...)* @__gxx_personality_v0 to i8*)
++          catch i8* null
++  ret i32 0
++}
++
++; test20a: Addr-of a pointer
++;          no safestack attribute
++; Requires no protector.
++define void @test20a() nounwind uwtable {
++entry:
++; LINUX-I386: test20a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test20a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test20a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32*, align 8
++  %b = alloca i32**, align 8
++  %call = call i32* @getp()
++  store i32* %call, i32** %a, align 8
++  store i32** %a, i32*** %b, align 8
++  %0 = load i32*** %b, align 8
++  call void @funcall2(i32** %0)
++  ret void
++}
++
++; test20b: Addr-of a pointer
++;          safestack attribute
++; Requires protector.
++define void @test20b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test20b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test20b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test20b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32*, align 8
++  %b = alloca i32**, align 8
++  %call = call i32* @getp()
++  store i32* %call, i32** %a, align 8
++  store i32** %a, i32*** %b, align 8
++  %0 = load i32*** %b, align 8
++  call void @funcall2(i32** %0)
++  ret void
++}
++
++; test21a: Addr-of a casted pointer
++;          no safestack attribute
++; Requires no protector.
++define void @test21a() nounwind uwtable {
++entry:
++; LINUX-I386: test21a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test21a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test21a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32*, align 8
++  %b = alloca float**, align 8
++  %call = call i32* @getp()
++  store i32* %call, i32** %a, align 8
++  %0 = bitcast i32** %a to float**
++  store float** %0, float*** %b, align 8
++  %1 = load float*** %b, align 8
++  call void @funfloat2(float** %1)
++  ret void
++}
++
++; test21b: Addr-of a casted pointer
++;          safestack attribute
++; Requires protector.
++define void @test21b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test21b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test21b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test21b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %a = alloca i32*, align 8
++  %b = alloca float**, align 8
++  %call = call i32* @getp()
++  store i32* %call, i32** %a, align 8
++  %0 = bitcast i32** %a to float**
++  store float** %0, float*** %b, align 8
++  %1 = load float*** %b, align 8
++  call void @funfloat2(float** %1)
++  ret void
++}
++
++; test22a: [2 x i8] in a class
++;          no safestack attribute
++; Requires no protector.
++define signext i8 @test22a() nounwind uwtable {
++entry:
++; LINUX-I386: test22a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test22a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test22a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca %class.A, align 1
++  %array = getelementptr inbounds %class.A* %a, i32 0, i32 0
++  %arrayidx = getelementptr inbounds [2 x i8]* %array, i32 0, i64 0
++  %0 = load i8* %arrayidx, align 1
++  ret i8 %0
++}
++
++; test22b: [2 x i8] in a class
++;          safestack attribute
++; Requires no protector.
++define signext i8 @test22b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test22b:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test22b:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test22b:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca %class.A, align 1
++  %array = getelementptr inbounds %class.A* %a, i32 0, i32 0
++  %arrayidx = getelementptr inbounds [2 x i8]* %array, i32 0, i64 0
++  %0 = load i8* %arrayidx, align 1
++  ret i8 %0
++}
++
++; test23a: [2 x i8] nested in several layers of structs and unions
++;          no safestack attribute
++; Requires no protector.
++define signext i8 @test23a() nounwind uwtable {
++entry:
++; LINUX-I386: test23a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test23a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test23a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %x = alloca %struct.deep, align 1
++  %b = getelementptr inbounds %struct.deep* %x, i32 0, i32 0
++  %c = bitcast %union.anon* %b to %struct.anon*
++  %d = getelementptr inbounds %struct.anon* %c, i32 0, i32 0
++  %e = getelementptr inbounds %struct.anon.0* %d, i32 0, i32 0
++  %array = bitcast %union.anon.1* %e to [2 x i8]*
++  %arrayidx = getelementptr inbounds [2 x i8]* %array, i32 0, i64 0
++  %0 = load i8* %arrayidx, align 1
++  ret i8 %0
++}
++
++; test23b: [2 x i8] nested in several layers of structs and unions
++;          safestack attribute
++; Requires no protector.
++define signext i8 @test23b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test23b:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test23b:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test23b:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %x = alloca %struct.deep, align 1
++  %b = getelementptr inbounds %struct.deep* %x, i32 0, i32 0
++  %c = bitcast %union.anon* %b to %struct.anon*
++  %d = getelementptr inbounds %struct.anon* %c, i32 0, i32 0
++  %e = getelementptr inbounds %struct.anon.0* %d, i32 0, i32 0
++  %array = bitcast %union.anon.1* %e to [2 x i8]*
++  %arrayidx = getelementptr inbounds [2 x i8]* %array, i32 0, i64 0
++  %0 = load i8* %arrayidx, align 1
++  ret i8 %0
++}
++
++; test24a: Variable sized alloca
++;          no safestack attribute
++; Requires no protector.
++define void @test24a(i32 %n) nounwind uwtable {
++entry:
++; LINUX-I386: test24a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test24a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test24a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %n.addr = alloca i32, align 4
++  %a = alloca i32*, align 8
++  store i32 %n, i32* %n.addr, align 4
++  %0 = load i32* %n.addr, align 4
++  %conv = sext i32 %0 to i64
++  %1 = alloca i8, i64 %conv
++  %2 = bitcast i8* %1 to i32*
++  store i32* %2, i32** %a, align 8
++  ret void
++}
++
++; test24b: Variable sized alloca
++;          safestack attribute
++; Requires protector.
++define void @test24b(i32 %n) nounwind uwtable safestack {
++entry:
++; LINUX-I386: test24b:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test24b:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test24b:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %n.addr = alloca i32, align 4
++  %a = alloca i32*, align 8
++  store i32 %n, i32* %n.addr, align 4
++  %0 = load i32* %n.addr, align 4
++  %conv = sext i32 %0 to i64
++  %1 = alloca i8, i64 %conv
++  %2 = bitcast i8* %1 to i32*
++  store i32* %2, i32** %a, align 8
++  ret void
++}
++
++; test25a: array of [4 x i32]
++;          no safestack attribute
++; Requires no protector.
++define i32 @test25a() nounwind uwtable {
++entry:
++; LINUX-I386: test25a:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test25a:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test25a:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca [4 x i32], align 16
++  %arrayidx = getelementptr inbounds [4 x i32]* %a, i32 0, i64 0
++  %0 = load i32* %arrayidx, align 4
++  ret i32 %0
++}
++
++; test25b: array of [4 x i32]
++;          safestack attribute
++; Requires no protector, constant index.
++define i32 @test25b() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test25b:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test25b:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test25b:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %a = alloca [4 x i32], align 16
++  %arrayidx = getelementptr inbounds [4 x i32]* %a, i32 0, i64 0
++  %0 = load i32* %arrayidx, align 4
++  ret i32 %0
++}
++
++; test26: Nested structure, no arrays, no address-of expressions.
++;         Verify that the resulting gep-of-gep does not incorrectly trigger
++;         a safe stack protector.
++;         safestack attribute
++; Requires no protector.
++define void @test26() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test26:
++; LINUX-I386-NOT: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test26:
++; LINUX-X64-NOT: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test26:
++; DARWIN-X64-NOT: movq	___safestack_unsafe_stack_ptr
++; DARWIN-X64: .cfi_endproc
++  %c = alloca %struct.nest, align 4
++  %b = getelementptr inbounds %struct.nest* %c, i32 0, i32 1
++  %_a = getelementptr inbounds %struct.pair* %b, i32 0, i32 0
++  %0 = load i32* %_a, align 4
++  %call = call i32 (i8*, ...)* @printf(i8* getelementptr inbounds ([4 x i8]* @.str, i32 0, i32 0), i32 %0)
++  ret void
++}
++
++; test27: Address-of a structure taken in a function with a loop where
++;         the alloca is an incoming value to a PHI node and a use of that PHI
++;         node is also an incoming value.
++;         Verify that the address-of analysis does not get stuck in infinite
++;         recursion when chasing the alloca through the PHI nodes.
++; Requires protector.
++define i32 @test27(i32 %arg) nounwind uwtable safestack {
++bb:
++; LINUX-I386: test27:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test27:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test27:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: .cfi_endproc
++  %tmp = alloca %struct.small*, align 8
++  %tmp1 = call i32 (...)* @dummy(%struct.small** %tmp) nounwind
++  %tmp2 = load %struct.small** %tmp, align 8
++  %tmp3 = ptrtoint %struct.small* %tmp2 to i64
++  %tmp4 = trunc i64 %tmp3 to i32
++  %tmp5 = icmp sgt i32 %tmp4, 0
++  br i1 %tmp5, label %bb6, label %bb21
++
++bb6:                                              ; preds = %bb17, %bb
++  %tmp7 = phi %struct.small* [ %tmp19, %bb17 ], [ %tmp2, %bb ]
++  %tmp8 = phi i64 [ %tmp20, %bb17 ], [ 1, %bb ]
++  %tmp9 = phi i32 [ %tmp14, %bb17 ], [ %tmp1, %bb ]
++  %tmp10 = getelementptr inbounds %struct.small* %tmp7, i64 0, i32 0
++  %tmp11 = load i8* %tmp10, align 1
++  %tmp12 = icmp eq i8 %tmp11, 1
++  %tmp13 = add nsw i32 %tmp9, 8
++  %tmp14 = select i1 %tmp12, i32 %tmp13, i32 %tmp9
++  %tmp15 = trunc i64 %tmp8 to i32
++  %tmp16 = icmp eq i32 %tmp15, %tmp4
++  br i1 %tmp16, label %bb21, label %bb17
++
++bb17:                                             ; preds = %bb6
++  %tmp18 = getelementptr inbounds %struct.small** %tmp, i64 %tmp8
++  %tmp19 = load %struct.small** %tmp18, align 8
++  %tmp20 = add i64 %tmp8, 1
++  br label %bb6
++
++bb21:                                             ; preds = %bb6, %bb
++  %tmp22 = phi i32 [ %tmp1, %bb ], [ %tmp14, %bb6 ]
++  %tmp23 = call i32 (...)* @dummy(i32 %tmp22) nounwind
++  ret i32 undef
++}
++
++%struct.__jmp_buf_tag = type { [8 x i64], i32, %struct.__sigset_t }
++%struct.__sigset_t = type { [16 x i64] }
++@buf = internal global [1 x %struct.__jmp_buf_tag] zeroinitializer, align 16
++
++; test28: setjmp/longjmp test.
++; Requires protector.
++define i32 @test28() nounwind uwtable safestack {
++entry:
++; LINUX-I386: test28:
++; LINUX-I386: movl	__safestack_unsafe_stack_ptr
++; LINUX-I386-NEXT: movl	%gs:
++; LINUX-I386: .cfi_endproc
++
++; LINUX-X64: test28:
++; LINUX-X64: movq	__safestack_unsafe_stack_ptr
++
++; LINUX-X64: .cfi_endproc
++
++; DARWIN-X64: test28:
++; DARWIN-X64: movq	%gs:1536
++; DARWIN-X64: movq	{{.*}}, %gs:1536
++; DARWIN-X64: movq	{{.*}}, %gs:1536
++; DARWIN-X64: .cfi_endproc
++  %retval = alloca i32, align 4
++  %x = alloca i32, align 4
++  store i32 0, i32* %retval
++  store i32 42, i32* %x, align 4
++  %call = call i32 @_setjmp(%struct.__jmp_buf_tag* getelementptr inbounds ([1 x %struct.__jmp_buf_tag]* @buf, i32 0, i32 0)) #3
++  %tobool = icmp ne i32 %call, 0
++  br i1 %tobool, label %if.else, label %if.then
++if.then:                                          ; preds = %entry
++  call void @funcall(i32* %x)
++  br label %if.end
++if.else:                                          ; preds = %entry
++  call i32 (...)* @dummy()
++  br label %if.end
++if.end:                                           ; preds = %if.else, %if.then
++  ret i32 0
++}
++
++declare i32 @_setjmp(%struct.__jmp_buf_tag*)
++
++declare double @testi_aux()
++declare i8* @strcpy(i8*, i8*)
++declare i32 @printf(i8*, ...)
++declare void @funcall(i32*)
++declare void @funcall2(i32**)
++declare void @funfloat(float*)
++declare void @funfloat2(float**)
++declare void @_Z3exceptPi(i32*)
++declare i32 @__gxx_personality_v0(...)
++declare i32* @getp()
++declare i32 @dummy(...)
+--
+2.1.2

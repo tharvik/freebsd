@@ -1,0 +1,667 @@
+From 2498f8499bd2fa04a5e7ec82486247c26428b6a2 Mon Sep 17 00:00:00 2001
+From: Volodymyr Kuznetsov <vova.kuznetsov@epfl.ch>
+Date: Thu, 16 Oct 2014 16:51:48 +0200
+Subject: [PATCH 1/1] Initial SafeStack release
+
+---
+ docs/AttributeReference.rst         | 15 +++++++
+ docs/SafeStack.rst                  | 81 +++++++++++++++++++++++++++++++++++++
+ docs/index.rst                      |  1 +
+ include/clang/Basic/Attr.td         |  7 ++++
+ include/clang/Basic/AttrDocs.td     | 11 +++++
+ include/clang/Basic/Builtins.def    |  4 ++
+ include/clang/Basic/LangOptions.def |  2 +-
+ include/clang/Basic/LangOptions.h   |  2 +-
+ include/clang/Driver/Options.td     |  4 ++
+ lib/CodeGen/CGBuiltin.cpp           |  8 ++++
+ lib/CodeGen/CodeGenFunction.cpp     |  3 ++
+ lib/CodeGen/CodeGenFunction.h       |  1 +
+ lib/CodeGen/CodeGenModule.cpp       | 22 ++++++++++
+ lib/Driver/ToolChains.cpp           |  1 +
+ lib/Driver/Tools.cpp                | 71 +++++++++++++++++++++++++++++++-
+ lib/Frontend/CompilerInvocation.cpp |  1 +
+ lib/Frontend/InitPreprocessor.cpp   |  2 +
+ lib/Sema/SemaDeclAttr.cpp           |  3 ++
+ runtime/compiler-rt/Makefile        |  6 +--
+ test/CodeGen/safestack-fn-attr.cpp  |  6 +++
+ test/CodeGen/safestack-var-attr.cpp |  5 +++
+ test/CodeGen/stack-protector.c      |  4 ++
+ test/Driver/safestack.c             |  8 ++++
+ test/SemaCXX/attr-no-safestack.cpp  | 37 +++++++++++++++++
+ 24 files changed, 299 insertions(+), 6 deletions(-)
+ create mode 100644 docs/SafeStack.rst
+ mode change 100644 => 100755 lib/Driver/Tools.cpp
+ create mode 100644 test/CodeGen/safestack-fn-attr.cpp
+ create mode 100644 test/CodeGen/safestack-var-attr.cpp
+ create mode 100644 test/Driver/safestack.c
+ create mode 100644 test/SemaCXX/attr-no-safestack.cpp
+
+diff --git tools/clang/docs/AttributeReference.rst tools/clang/docs/AttributeReference.rst
+index 115a217..b3c832d 100644
+--- tools/clang/docs/AttributeReference.rst
++++ tools/clang/docs/AttributeReference.rst
+@@ -483,6 +483,21 @@ specify that checks for data races on plain (non-atomic) memory accesses should
+ not be inserted by ThreadSanitizer. The function is still instrumented by the
+ tool to avoid false positives and provide meaningful stack traces.
+
++no_safe_stack
++-------------
++
++.. csv-table:: Supported Syntaxes
++   :header: "GNU", "C++11", "__declspec", "Keyword"
++
++   "X","","",""
++
++.. _langext-safe_stack:
++
++Use ``__attribute__((no_safe_stack))`` on a function or variable declaration
++to specify that the safe stack instrumentation should not be applied to it,
++even if enabled globally (see -fsafe-stack flag). This attribute may be
++required for functions that make assumptions about the exact layout of their
++stack frames.
+
+ no_split_stack (gnu::no_split_stack)
+ ------------------------------------
+diff --git tools/clang/docs/SafeStack.rst tools/clang/docs/SafeStack.rst
+new file mode 100644
+index 0000000..2e6be1c
+--- /dev/null
++++ tools/clang/docs/SafeStack.rst
+@@ -0,0 +1,81 @@
++=========
++SafeStack
++=========
++
++.. contents::
++   :local:
++
++Introduction
++============
++
++SafeStack is an instrumentation pass to LLVM, which separates the
++program stack into a safe stack, which stores return addresses,
++register spills, and local variables that are statically verified
++to be accessed in a safe way, and the unsafe stack, which stores
++everything else. Such separation makes it much harder for an attacker
++to corrupt objects on the safe stack, including function pointers
++stored in spilled registers and return addresses. You can find more
++information about the safe stack, as well as other parts of or
++control-flow hijack protection technique in our OSDI paper on
++code-pointer integrity (http://dslab.epfl.ch/pubs/cpi.pdf) and our
++project website (http://levee.epfl.ch).
++
++SafeStack typically does not introduce any measurable performance
++overhead.
++
++How to build
++============
++
++Follow the `clang build instructions <../get_started.html>`_. CMake
++build is supported.
++
++Usage
++=====
++
++Simply compile and link your program with ``-fsafe-stack`` flag.
++The SafeStack run-time library should be linked to the final
++executable, so make sure to use ``clang`` (not ``ld``) for the final
++link step.
++
++``__SAFESTACK__``
++-----------------
++
++In some cases one may need to execute different code depending on
++whether SafeStack is enabled. The define ``__SAFESTACK__`` can be
++used for this purpose.
++
++.. code-block:: c
++
++    #ifdef __SAFESTACK__
++    // code that builds only under SafeStack
++    #endif
++
++``__attribute__((no_safe_stack))``
++----------------------------------
++
++Use ``__attribute__((no_safe_stack))`` on a function or variable declaration
++to specify that the safe stack instrumentation should not be applied to it,
++even if enabled globally (see -fsafe-stack flag). This attribute may be
++required for functions that make assumptions about the exact layout of their
++stack frames.
++
++Supported Platforms
++===================
++
++SafeStack is supported on
++
++* Linux
++* FreeBSD
++* MacOSX
++
++Current Status
++==============
++
++SafeStack is an experimental tool. It is known to work on large
++real-world programs, many FreeBSD packages, chromium, ...
++
++More Information
++================
++
++`http://levee.epfl.ch/ <http://levee.epfl.ch/>`_
++
+diff --git tools/clang/docs/index.rst tools/clang/docs/index.rst
+index bf2de7e..bcc93e9 100644
+--- tools/clang/docs/index.rst
++++ tools/clang/docs/index.rst
+@@ -27,6 +27,7 @@ Using Clang as a Compiler
+    DataFlowSanitizer
+    LeakSanitizer
+    SanitizerSpecialCaseList
++   SafeStack
+    Modules
+    MSVCCompatibility
+    FAQ
+diff --git tools/clang/include/clang/Basic/Attr.td tools/clang/include/clang/Basic/Attr.td
+index 704a375..1685880 100644
+--- tools/clang/include/clang/Basic/Attr.td
++++ tools/clang/include/clang/Basic/Attr.td
+@@ -1274,6 +1274,13 @@ def X86ForceAlignArgPointer : InheritableAttr, TargetSpecificAttr<TargetX86> {
+   let Documentation = [Undocumented];
+ }
+
++// Attribute to disable SafeStack (or equivalent) instrumentation.
++def NoSafeStack : InheritableAttr {
++  let Spellings = [GCC<"no_safe_stack">];
++  let Subjects = SubjectList<[Var, Function], ErrorDiag>;
++  let Documentation = [NoSafeStackDocs];
++}
++
+ // Attribute to disable AddressSanitizer (or equivalent) checks.
+ def NoSanitizeAddress : InheritableAttr {
+   let Spellings = [GCC<"no_address_safety_analysis">,
+diff --git tools/clang/include/clang/Basic/AttrDocs.td tools/clang/include/clang/Basic/AttrDocs.td
+index e6d6a33..e65bbcd 100644
+--- tools/clang/include/clang/Basic/AttrDocs.td
++++ tools/clang/include/clang/Basic/AttrDocs.td
+@@ -731,6 +731,17 @@ This attribute accepts a single parameter that must be one of the following:
+   }];
+ }
+
++def NoSafeStackDocs : Documentation {
++  let Category = DocCatFunction;
++  let Content = [{
++Use ``__attribute__((no_safe_stack))`` on a function or variable declaration
++to specify that the safe stack instrumentation should not be applied to it,
++even if enabled globally (see -fsafe-stack flag). This attribute may be
++required for functions that make assumptions about the exact layout of their
++stack frames.
++  }];
++}
++
+ def NoSanitizeAddressDocs : Documentation {
+   let Category = DocCatFunction;
+   // This function has multiple distinct spellings, and so it requires a custom
+diff --git tools/clang/include/clang/Basic/Builtins.def tools/clang/include/clang/Basic/Builtins.def
+index e705382..38fe269 100644
+--- tools/clang/include/clang/Basic/Builtins.def
++++ tools/clang/include/clang/Basic/Builtins.def
+@@ -1210,6 +1210,10 @@ BUILTIN(__builtin_addressof, "v*v&", "nct")
+ BUILTIN(__builtin_operator_new, "v*z", "c")
+ BUILTIN(__builtin_operator_delete, "vv*", "n")
+
++// Safestack builtins
++BUILTIN(__builtin_safestack_get_usp, "v*", "n")
++BUILTIN(__builtin_safestack_set_usp, "vv*", "n")
++
+ #undef BUILTIN
+ #undef LIBBUILTIN
+ #undef LANGBUILTIN
+diff --git tools/clang/include/clang/Basic/LangOptions.def tools/clang/include/clang/Basic/LangOptions.def
+index a297a4c..be8319d 100644
+--- tools/clang/include/clang/Basic/LangOptions.def
++++ tools/clang/include/clang/Basic/LangOptions.def
+@@ -163,7 +163,7 @@ ENUM_LANGOPT(ValueVisibilityMode, Visibility, 3, DefaultVisibility,
+              "value symbol visibility")
+ ENUM_LANGOPT(TypeVisibilityMode, Visibility, 3, DefaultVisibility,
+              "type symbol visibility")
+-ENUM_LANGOPT(StackProtector, StackProtectorMode, 2, SSPOff,
++ENUM_LANGOPT(StackProtector, StackProtectorMode, 3, SSPOff,
+              "stack protector mode")
+ ENUM_LANGOPT(SignedOverflowBehavior, SignedOverflowBehaviorTy, 2, SOB_Undefined,
+              "signed integer overflow handling")
+diff --git tools/clang/include/clang/Basic/LangOptions.h tools/clang/include/clang/Basic/LangOptions.h
+index 9bffc7c..6cc1856 100644
+--- tools/clang/include/clang/Basic/LangOptions.h
++++ tools/clang/include/clang/Basic/LangOptions.h
+@@ -57,7 +57,7 @@ public:
+   typedef clang::Visibility Visibility;
+
+   enum GCMode { NonGC, GCOnly, HybridGC };
+-  enum StackProtectorMode { SSPOff, SSPOn, SSPStrong, SSPReq };
++  enum StackProtectorMode { SSPOff, SSPOn, SSPStrong, SSPReq, SSPSafeStack };
+
+   enum SignedOverflowBehaviorTy {
+     SOB_Undefined,  // Default C standard behavior.
+diff --git tools/clang/include/clang/Driver/Options.td tools/clang/include/clang/Driver/Options.td
+index 9d4fdad..f65bc89 100644
+--- tools/clang/include/clang/Driver/Options.td
++++ tools/clang/include/clang/Driver/Options.td
+@@ -839,6 +839,10 @@ def fstack_protector_strong : Flag<["-"], "fstack-protector-strong">, Group<f_Gr
+   HelpText<"Use a strong heuristic to apply stack protectors to functions">;
+ def fstack_protector : Flag<["-"], "fstack-protector">, Group<f_Group>,
+   HelpText<"Enable stack protectors for functions potentially vulnerable to stack smashing">;
++def fsafe_stack : Flag<["-"], "fsafe-stack">, Group<f_Group>,
++  HelpText<"Enable safe stack protection against stack-based memory corruption errors">;
++def fno_safe_stack : Flag<["-"], "fno-safe-stack">, Group<f_Group>,
++  HelpText<"Disable safe stack protection against stack-based memory corruption errors">;
+ def fstandalone_debug : Flag<["-"], "fstandalone-debug">, Group<f_Group>, Flags<[CC1Option]>,
+   HelpText<"Emit full debug info for all types used by the program">;
+ def fno_standalone_debug : Flag<["-"], "fno-standalone-debug">, Group<f_Group>, Flags<[CC1Option]>,
+diff --git tools/clang/lib/CodeGen/CGBuiltin.cpp tools/clang/lib/CodeGen/CGBuiltin.cpp
+index 4f68b34..43887bb 100644
+--- tools/clang/lib/CodeGen/CGBuiltin.cpp
++++ tools/clang/lib/CodeGen/CGBuiltin.cpp
+@@ -1587,6 +1587,14 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
+     RMWI->setVolatile(true);
+     return RValue::get(RMWI);
+   }
++  case Builtin::BI__builtin_safestack_set_usp: {
++    Value *I = CGM.getIntrinsic(Intrinsic::safestack_set_usp);
++    return RValue::get(Builder.CreateCall(I, EmitScalarExpr(E->getArg(0))));
++  }
++  case Builtin::BI__builtin_safestack_get_usp: {
++    Value *I = CGM.getIntrinsic(Intrinsic::safestack_get_usp);
++    return RValue::get(Builder.CreateCall(I));
++  }
+   }
+
+   // If this is an alias for a lib function (e.g. __builtin_sin), emit
+diff --git tools/clang/lib/CodeGen/CodeGenFunction.cpp tools/clang/lib/CodeGen/CodeGenFunction.cpp
+index 5ca3a78..d6d0273 100644
+--- tools/clang/lib/CodeGen/CodeGenFunction.cpp
++++ tools/clang/lib/CodeGen/CodeGenFunction.cpp
+@@ -282,6 +282,9 @@ void CodeGenFunction::FinishFunction(SourceLocation EndLoc) {
+   if (CGM.getCodeGenOpts().EmitDeclMetadata)
+     EmitDeclMetadata();
+
++  if (CGM.getLangOpts().getStackProtector() == LangOptions::SSPSafeStack)
++    EmitSafeStackMetadata();
++
+   for (SmallVectorImpl<std::pair<llvm::Instruction *, llvm::Value *> >::iterator
+            I = DeferredReplacements.begin(),
+            E = DeferredReplacements.end();
+diff --git tools/clang/lib/CodeGen/CodeGenFunction.h tools/clang/lib/CodeGen/CodeGenFunction.h
+index 59cc30d..56055e7 100644
+--- tools/clang/lib/CodeGen/CodeGenFunction.h
++++ tools/clang/lib/CodeGen/CodeGenFunction.h
+@@ -2691,6 +2691,7 @@ private:
+   }
+
+   void EmitDeclMetadata();
++  void EmitSafeStackMetadata();
+
+   CodeGenModule::ByrefHelpers *
+   buildByrefHelpers(llvm::StructType &byrefType,
+diff --git tools/clang/lib/CodeGen/CodeGenModule.cpp tools/clang/lib/CodeGen/CodeGenModule.cpp
+index 48823be..f647641 100644
+--- tools/clang/lib/CodeGen/CodeGenModule.cpp
++++ tools/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -727,6 +727,9 @@ void CodeGenModule::SetLLVMFunctionAttributesForDefinition(const Decl *D,
+     B.addAttribute(llvm::Attribute::StackProtectStrong);
+   else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
+     B.addAttribute(llvm::Attribute::StackProtectReq);
++  else if (LangOpts.getStackProtector() == LangOptions::SSPSafeStack)
++    if (!D->hasAttr<NoSafeStackAttr>())
++      B.addAttribute(llvm::Attribute::SafeStack);
+
+   // Add sanitizer attributes if function is not blacklisted.
+   if (!SanitizerBL.isIn(*F)) {
+@@ -3300,6 +3303,25 @@ void CodeGenFunction::EmitDeclMetadata() {
+   }
+ }
+
++void CodeGenFunction::EmitSafeStackMetadata()
++{
++  if (LocalDeclMap.empty()) return;
++
++  llvm::LLVMContext &Context = getLLVMContext();
++
++  for (auto &I : LocalDeclMap) {
++    const Decl *D = I.first;
++    llvm::Value *Addr = I.second;
++    if (auto *Alloca = dyn_cast<llvm::AllocaInst>(Addr)) {
++      if (D->getAttr<NoSafeStackAttr>()) {
++        llvm::MDNode* N = llvm::MDNode::get(
++          Context, llvm::MDString::get(Context, "no_safe_stack"));
++        Alloca->setMetadata("no_safe_stack", N);
++      }
++    }
++  }
++}
++
+ void CodeGenModule::EmitVersionIdentMetadata() {
+   llvm::NamedMDNode *IdentMetadata =
+     TheModule.getOrInsertNamedMetadata("llvm.ident");
+diff --git tools/clang/lib/Driver/ToolChains.cpp tools/clang/lib/Driver/ToolChains.cpp
+index b46f69d..87f6ef1 100644
+--- tools/clang/lib/Driver/ToolChains.cpp
++++ tools/clang/lib/Driver/ToolChains.cpp
+@@ -10,6 +10,7 @@
+ #include "ToolChains.h"
+ #include "clang/Basic/ObjCRuntime.h"
+ #include "clang/Basic/Version.h"
++#include "clang/Basic/LangOptions.h"
+ #include "clang/Config/config.h" // for GCC_INSTALL_PREFIX
+ #include "clang/Driver/Compilation.h"
+ #include "clang/Driver/Driver.h"
+diff --git tools/clang/lib/Driver/Tools.cpp tools/clang/lib/Driver/Tools.cpp
+old mode 100644
+new mode 100755
+index 198e82e..1cb7f66
+--- tools/clang/lib/Driver/Tools.cpp
++++ tools/clang/lib/Driver/Tools.cpp
+@@ -2085,6 +2085,41 @@ static void addProfileRT(
+   CmdArgs.push_back(Args.MakeArgString(LibProfile));
+ }
+
++static void addSafeStackRT(
++    const ToolChain &TC, const ArgList &Args, ArgStringList &CmdArgs) {
++  if (!Args.hasFlag(options::OPT_fsafe_stack,
++                    options::OPT_fno_safe_stack, false))
++    return;
++
++  {
++    const char *LibBaseName = "libclang_rt.safestack-";
++    SmallString<128> LibName = getCompilerRTLibDir(TC);
++    llvm::sys::path::append(LibName,
++      Twine(LibBaseName) + getArchNameForCompilerRTLib(TC) + ".a");
++
++    CmdArgs.push_back(Args.MakeArgString(LibName));
++  }
++
++  // Elf does not support pre-init array in DSO
++  if (!Args.hasArg(options::OPT_shared) && TC.getTriple().isOSBinFormatELF()) {
++    const char *LibBaseName = "libclang_rt.safestack_preinit-";
++    SmallString<128> LibName = getCompilerRTLibDir(TC);
++    llvm::sys::path::append(LibName,
++      Twine(LibBaseName) + getArchNameForCompilerRTLib(TC) + ".a");
++    CmdArgs.push_back(Args.MakeArgString(LibName));
++  }
++
++  // Safestack runtime requires dl on Linux
++  if (TC.getTriple().isOSLinux())
++    CmdArgs.push_back("-ldl");
++
++  // We need to ensure that the safe stack init function from the safestack
++  // runtime library is linked in, even though it might not be referenced by
++  // any code in the module before LTO optimizations are applied.
++  CmdArgs.push_back("-u");
++  CmdArgs.push_back("__safestack_init");
++}
++
+ static SmallString<128> getSanitizerRTLibName(const ToolChain &TC,
+                                               const StringRef Sanitizer,
+                                               bool Shared) {
+@@ -3598,7 +3633,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+
+   // -stack-protector=0 is default.
+   unsigned StackProtectorLevel = 0;
+-  if (Arg *A = Args.getLastArg(options::OPT_fno_stack_protector,
++  if (Args.hasFlag(options::OPT_fsafe_stack,
++                   options::OPT_fno_safe_stack, false)) {
++    StackProtectorLevel = LangOptions::SSPSafeStack;
++    Args.ClaimAllArgs(options::OPT_fno_stack_protector);
++    Args.ClaimAllArgs(options::OPT_fstack_protector_all);
++    Args.ClaimAllArgs(options::OPT_fstack_protector_strong);
++    Args.ClaimAllArgs(options::OPT_fstack_protector);
++  } else if (Arg *A = Args.getLastArg(options::OPT_fno_stack_protector,
+                                options::OPT_fstack_protector_all,
+                                options::OPT_fstack_protector_strong,
+                                options::OPT_fstack_protector)) {
+@@ -5736,6 +5778,21 @@ void darwin::Link::ConstructJob(Compilation &C, const JobAction &JA,
+       !Args.hasArg(options::OPT_nostartfiles))
+     getMachOToolChain().addStartObjectFileArgs(Args, CmdArgs);
+
++  // SafeStack requires its own runtime libraries
++  // These libraries should be linked first, to make sure the
++  // __safestack_init constructor executes before everything else
++  if (Args.hasFlag(options::OPT_fsafe_stack,
++                   options::OPT_fno_safe_stack, false)) {
++    getMachOToolChain().AddLinkRuntimeLib(Args, CmdArgs,
++                                          "libclang_rt.safestack_osx.a");
++
++    // We need to ensure that the safe stack init function from the safestack
++    // runtime library is linked in, even though it might not be referenced by
++    // any code in the module before LTO optimizations are applied.
++    CmdArgs.push_back("-u");
++    CmdArgs.push_back("___safestack_init");
++  }
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+
+   LibOpenMP UsedOpenMPLib = LibUnknown;
+@@ -5966,6 +6023,8 @@ void solaris::Link::ConstructJob(Compilation &C, const JobAction &JA,
+
+   CmdArgs.push_back(Args.MakeArgString("-L" + GCCLibPath));
+
++  addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+   Args.AddAllArgs(CmdArgs, options::OPT_e);
+@@ -6620,6 +6679,8 @@ void freebsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
+     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtbegin)));
+   }
+
++  //addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   const ToolChain::path_list Paths = ToolChain.getFilePaths();
+   for (const auto &Path : Paths)
+@@ -6888,6 +6949,8 @@ void netbsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
+     }
+   }
+
++  addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+   Args.AddAllArgs(CmdArgs, options::OPT_e);
+@@ -7402,6 +7465,8 @@ void gnutools::Link::ConstructJob(Compilation &C, const JobAction &JA,
+     ToolChain.AddFastMathRuntimeIfAvailable(Args, CmdArgs);
+   }
+
++  addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   Args.AddAllArgs(CmdArgs, options::OPT_u);
+
+@@ -7541,6 +7606,8 @@ void minix::Link::ConstructJob(Compilation &C, const JobAction &JA,
+       CmdArgs.push_back(Args.MakeArgString(getToolChain().GetFilePath("crtn.o")));
+   }
+
++  addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+   Args.AddAllArgs(CmdArgs, options::OPT_e);
+@@ -7669,6 +7736,8 @@ void dragonfly::Link::ConstructJob(Compilation &C, const JobAction &JA,
+                               getToolChain().GetFilePath("crtbegin.o")));
+   }
+
++  addSafeStackRT(getToolChain(), Args, CmdArgs);
++
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   Args.AddAllArgs(CmdArgs, options::OPT_T_Group);
+   Args.AddAllArgs(CmdArgs, options::OPT_e);
+diff --git tools/clang/lib/Frontend/CompilerInvocation.cpp tools/clang/lib/Frontend/CompilerInvocation.cpp
+index ce61a46..762d108 100644
+--- tools/clang/lib/Frontend/CompilerInvocation.cpp
++++ tools/clang/lib/Frontend/CompilerInvocation.cpp
+@@ -1572,6 +1572,7 @@ static void ParseLangArgs(LangOptions &Opts, ArgList &Args, InputKind IK,
+   case 1: Opts.setStackProtector(LangOptions::SSPOn);  break;
+   case 2: Opts.setStackProtector(LangOptions::SSPStrong); break;
+   case 3: Opts.setStackProtector(LangOptions::SSPReq); break;
++  case 4: Opts.setStackProtector(LangOptions::SSPSafeStack); break;
+   }
+
+   // Parse -fsanitize= arguments.
+diff --git tools/clang/lib/Frontend/InitPreprocessor.cpp tools/clang/lib/Frontend/InitPreprocessor.cpp
+index 7a9d09a..ed8e9b0 100644
+--- tools/clang/lib/Frontend/InitPreprocessor.cpp
++++ tools/clang/lib/Frontend/InitPreprocessor.cpp
+@@ -831,6 +831,8 @@ static void InitializePredefinedMacros(const TargetInfo &TI,
+     Builder.defineMacro("__SSP_STRONG__", "2");
+   else if (LangOpts.getStackProtector() == LangOptions::SSPReq)
+     Builder.defineMacro("__SSP_ALL__", "3");
++  else if (LangOpts.getStackProtector() == LangOptions::SSPSafeStack)
++    Builder.defineMacro("__SAFESTACK__", "4");
+
+   if (FEOpts.ProgramAction == frontend::RewriteObjC)
+     Builder.defineMacro("__weak", "__attribute__((objc_gc(weak)))");
+diff --git tools/clang/lib/Sema/SemaDeclAttr.cpp tools/clang/lib/Sema/SemaDeclAttr.cpp
+index 61683cd..9dcf143 100644
+--- tools/clang/lib/Sema/SemaDeclAttr.cpp
++++ tools/clang/lib/Sema/SemaDeclAttr.cpp
+@@ -4439,6 +4439,9 @@ static void ProcessDeclAttribute(Sema &S, Scope *scope, Decl *D,
+   case AttributeList::AT_ScopedLockable:
+     handleSimpleAttribute<ScopedLockableAttr>(S, D, Attr);
+     break;
++  case AttributeList::AT_NoSafeStack:
++    handleSimpleAttribute<NoSafeStackAttr>(S, D, Attr);
++    break;
+   case AttributeList::AT_NoSanitizeAddress:
+     handleSimpleAttribute<NoSanitizeAddressAttr>(S, D, Attr);
+     break;
+diff --git tools/clang/runtime/compiler-rt/Makefile tools/clang/runtime/compiler-rt/Makefile
+index ccd83a3..eb73ffd 100644
+--- tools/clang/runtime/compiler-rt/Makefile
++++ tools/clang/runtime/compiler-rt/Makefile
+@@ -83,7 +83,7 @@ RuntimeLibrary.darwin.Configs := \
+	eprintf.a 10.4.a osx.a ios.a cc_kext.a cc_kext_ios5.a \
+	asan_osx_dynamic.dylib \
+	profile_osx.a profile_ios.a \
+-	ubsan_osx.a
++	ubsan_osx.a safestack_osx.a
+
+ RuntimeLibrary.macho_embedded.Configs := \
+	hard_static.a hard_pic.a
+@@ -127,7 +127,7 @@ TryCompile = \
+ # We try to build 32-bit runtimes both on 32-bit hosts and 64-bit hosts.
+ Runtime32BitConfigs = \
+	builtins-i386.a profile-i386.a san-i386.a asan-i386.a asan_cxx-i386.a \
+-	ubsan-i386.a ubsan_cxx-i386.a
++	ubsan-i386.a ubsan_cxx-i386.a safestack-i386.a
+
+ # We currently only try to generate runtime libraries on x86.
+ ifeq ($(ARCH),x86)
+@@ -138,7 +138,7 @@ ifeq ($(ARCH),x86_64)
+ RuntimeLibrary.linux.Configs += \
+	builtins-x86_64.a profile-x86_64.a san-x86_64.a asan-x86_64.a \
+	asan_cxx-x86_64.a tsan-x86_64.a msan-x86_64.a ubsan-x86_64.a \
+-	ubsan_cxx-x86_64.a dfsan-x86_64.a lsan-x86_64.a
++	ubsan_cxx-x86_64.a dfsan-x86_64.a lsan-x86_64.a safestack-x86_64.a
+ # We need to build 32-bit ASan/UBsan libraries on 64-bit platform, and add them
+ # to the list of runtime libraries to make
+ # "clang -fsanitize=(address|undefined) -m32" work.
+diff --git tools/clang/test/CodeGen/safestack-fn-attr.cpp tools/clang/test/CodeGen/safestack-fn-attr.cpp
+new file mode 100644
+index 0000000..71c100f
+--- /dev/null
++++ tools/clang/test/CodeGen/safestack-fn-attr.cpp
+@@ -0,0 +1,6 @@
++// RUN: %clang_cc1 -triple x86_64-linux-unknown -emit-llvm -o - %s -stack-protector 4 | FileCheck -check-prefix=SP %s
++
++__attribute__((no_safe_stack))
++int foo(int *a) {  return *a; }
++
++// SP-NOT: attributes #{{.*}} = { nounwind safestack{{.*}} }
+diff --git tools/clang/test/CodeGen/safestack-var-attr.cpp tools/clang/test/CodeGen/safestack-var-attr.cpp
+new file mode 100644
+index 0000000..f6fd196
+--- /dev/null
++++ tools/clang/test/CodeGen/safestack-var-attr.cpp
+@@ -0,0 +1,5 @@
++// RUN: %clang_cc1 -triple x86_64-linux-unknown -emit-llvm -o - %s -stack-protector 4 | FileCheck -check-prefix=SP %s
++
++int foo(unsigned x) { char buffer[x + 1] __attribute__((no_safe_stack)); return buffer[x]; }
++
++// SP: !no_safe_stack
+diff --git tools/clang/test/CodeGen/stack-protector.c tools/clang/test/CodeGen/stack-protector.c
+index 2fb9b2c..d456f5c 100644
+--- tools/clang/test/CodeGen/stack-protector.c
++++ tools/clang/test/CodeGen/stack-protector.c
+@@ -6,6 +6,8 @@
+ // SSPSTRONG: define void @test1(i8* %msg) #0 {
+ // RUN: %clang_cc1 -emit-llvm -o - %s -stack-protector 3 | FileCheck -check-prefix=SSPREQ %s
+ // SSPREQ: define void @test1(i8* %msg) #0 {
++// RUN: %clang_cc1 -emit-llvm -o - %s -stack-protector 4 | FileCheck -check-prefix=SAFESTACK %s
++// SAFESTACK: define void @test1(i8* %msg) #0 {
+
+ typedef __SIZE_TYPE__ size_t;
+
+@@ -26,3 +28,5 @@ void test1(const char *msg) {
+ // SSPSTRONG: attributes #{{.*}} = { nounwind sspstrong{{.*}} }
+
+ // SSPREQ: attributes #{{.*}} = { nounwind sspreq{{.*}} }
++
++// SAFESTACK: attributes #{{.*}} = { nounwind safestack{{.*}} }
+diff --git tools/clang/test/Driver/safestack.c tools/clang/test/Driver/safestack.c
+new file mode 100644
+index 0000000..1e9b5c7
+--- /dev/null
++++ tools/clang/test/Driver/safestack.c
+@@ -0,0 +1,8 @@
++// RUN: %clang -fno-safe-stack -### %s 2>&1 | FileCheck %s -check-prefix=NOSP
++// NOSP-NOT: "-stack-protector" "4"
++
++// RUN: %clang -fsafe-stack -### %s 2>&1 | FileCheck %s -check-prefix=SP
++// RUN: %clang -fsanatizer=address -fsafe-stack -### %s 2>&1 | FileCheck %s -check-prefix=SP
++// RUN: %clang -fstack-protector -fsafe-stack -### %s 2>&1 | FileCheck %s -check-prefix=SP
++// RUN: %clang -fsafe-stack -fstack-protector-all -### %s 2>&1 | FileCheck %s -check-prefix=SP
++// SP: "-stack-protector" "4"
+diff --git tools/clang/test/SemaCXX/attr-no-safestack.cpp tools/clang/test/SemaCXX/attr-no-safestack.cpp
+new file mode 100644
+index 0000000..34dbba5
+--- /dev/null
++++ tools/clang/test/SemaCXX/attr-no-safestack.cpp
+@@ -0,0 +1,37 @@
++// RUN: %clang_cc1 -fsyntax-only -verify  %s
++
++#define NO_SAFE_STACK __attribute__((no_safe_stack))
++
++#if !__has_attribute(no_safe_stack)
++#error "Should support no_safe_stack"
++#endif
++
++void nosp_fun() NO_SAFE_STACK;
++
++void nosp_fun_args() __attribute__((no_safe_stack(1))); // \
++  // expected-error {{'no_safe_stack' attribute takes no arguments}}
++
++int nosp_testfn(int y) NO_SAFE_STACK;
++
++int nosp_testfn(int y) {
++  int x NO_SAFE_STACK = y; // \
++    // expected-error {{'no_safe_stack' attribute only applies to functions}}
++  return x;
++}
++
++int nosp_test_var NO_SAFE_STACK; // \
++  // expected-error {{'no_safe_stack' attribute only applies to functions}}
++
++class NoSPFoo {
++ private:
++  int test_field NO_SAFE_STACK; // \
++    // expected-error {{'no_safe_stack' attribute only applies to functions}}
++  void test_method() NO_SAFE_STACK;
++};
++
++class NO_SAFE_STACK NoSPTestClass { // \
++  // expected-error {{'no_safe_stack' attribute only applies to functions}}
++};
++
++void nosp_fun_params(int lvar NO_SAFE_STACK); // \
++  // expected-error {{'no_safe_stack' attribute only applies to functions}}
+--
+2.1.2
