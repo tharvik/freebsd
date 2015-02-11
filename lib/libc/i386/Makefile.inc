@@ -4,3 +4,4 @@
 GDTOASRCS+=strtorx.c
 MDSRCS+=machdep_ldisx.c
 SYM_MAPS+=${LIBC_SRCTOP}/i386/Symbol.map
+CFLAGS+=-fno-safe-stack

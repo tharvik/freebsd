@@ -16,6 +16,7 @@ CSTD?=		gnu99
 TOPSRCDIR=	${.CURDIR}/../..
 CFLAGS+=	-Wall -DFREEBSD_ELF -DIN_RTLD
 CFLAGS+=	-I${TOPSRCDIR}/lib/csu/common
+CFLAGS+=	-fno-safe-stack
 .if exists(${.CURDIR}/${MACHINE_ARCH})
 RTLD_ARCH=	${MACHINE_ARCH}
 .else

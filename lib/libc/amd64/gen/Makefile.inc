@@ -1,6 +1,7 @@
 #	@(#)Makefile.inc	8.1 (Berkeley) 6/4/93
 # $FreeBSD$
 
+CFLAGS+= -fno-safe-stack
 SRCS+=	_setjmp.S _set_tp.c rfork_thread.S setjmp.S sigsetjmp.S \
 	fabs.S getcontextx.c \
 	infinity.c ldexp.c makecontext.c signalcontext.c \
