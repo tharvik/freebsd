@@ -247,6 +247,11 @@ unsigned TargetTransformInfo::getCostOfKeepingLiveOverCall(ArrayRef<Type*> Tys)
   return PrevTTI->getCostOfKeepingLiveOverCall(Tys);
 }
 
+bool TargetTransformInfo::getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                                    unsigned &Offset) const {
+  return PrevTTI->getUnsafeStackPtrLocation(AddressSpace, Offset);
+}
+
 namespace {
 
 struct NoTTI final : ImmutablePass, TargetTransformInfo {
@@ -643,6 +648,10 @@ struct NoTTI final : ImmutablePass, TargetTransformInfo {
     return 0;
   }
 
+  bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const override {
+    return false;
+  }
 };
 
 } // end anonymous namespace

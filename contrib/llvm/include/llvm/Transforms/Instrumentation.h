@@ -105,6 +105,10 @@ inline ModulePass *createDataFlowSanitizerPassForJIT(StringRef ABIListFile =
 // checking on loads, stores, and other memory intrinsics.
 FunctionPass *createBoundsCheckingPass();
 
+/// createSafeStackPass - This pass splits the stack into a safe stack and
+/// an unsafe stack to protect against stack-based overflow vulnerabilities.
+ModulePass *createSafeStackPass();
+
 } // End llvm namespace
 
 #endif

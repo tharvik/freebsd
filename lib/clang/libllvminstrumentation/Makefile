@@ -13,6 +13,7 @@ SRCS=	AddressSanitizer.cpp \
 	Instrumentation.cpp \
 	InstrProfiling.cpp \
 	SanitizerCoverage.cpp \
+	SafeStack.cpp \
 	ThreadSanitizer.cpp
 
 TGHDRS=	Intrinsics

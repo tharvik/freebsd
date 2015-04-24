@@ -438,6 +438,12 @@ public:
   /// any callee-saved registers, so would require a spill and fill.
   virtual unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type*> Tys) const;
 
+  /// \returns True if the target stores the unsafe stack pointer for the safe
+  /// stack instrumentation at a fixed offset in some non-standard address
+  /// space, and populates the address space and offset as appropriate.
+  virtual bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                         unsigned &Offset) const;
+
   /// @}
 
   /// Analysis group identification.

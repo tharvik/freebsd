@@ -237,6 +237,7 @@ void initializeRegionOnlyPrinterPass(PassRegistry&);
 void initializeRegionOnlyViewerPass(PassRegistry&);
 void initializeRegionPrinterPass(PassRegistry&);
 void initializeRegionViewerPass(PassRegistry&);
+void initializeSafeStackPass(PassRegistry&);
 void initializeSCCPPass(PassRegistry&);
 void initializeSROAPass(PassRegistry&);
 void initializeSROA_DTPass(PassRegistry&);
