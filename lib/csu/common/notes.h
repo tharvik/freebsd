@@ -36,4 +36,6 @@
 #define	CRT_NOINIT_NOTETYPE	2
 #define	ARCH_NOTETYPE		3
 
+#define NOTE_SAFESTACK_NAME	"safestack"
+
 #endif

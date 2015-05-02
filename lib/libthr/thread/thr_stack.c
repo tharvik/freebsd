@@ -187,14 +187,12 @@ __pthread_map_stacks_exec(void)
 	THREAD_LIST_UNLOCK(curthread);
 }
 
-int
-_thr_stack_alloc(struct pthread_attr *attr)
+void *
+_thr_stack_alloc(size_t stacksize, size_t guardsize)
 {
 	struct pthread *curthread = _get_curthread();
-	struct stack *spare_stack;
-	size_t stacksize;
-	size_t guardsize;
-	char *stackaddr;
+	struct stack *spare_stack = NULL;
+	char *stackaddr = NULL;
 
 	/*
 	 * Round up stack size to nearest multiple of _thr_page_size so
@@ -203,11 +201,8 @@ _thr_stack_alloc(struct pthread_attr *attr)
 	 * unused space above the beginning of the stack, so the stack
 	 * sits snugly against its guard.
 	 */
-	stacksize = round_up(attr->stacksize_attr);
-	guardsize = round_up(attr->guardsize_attr);
-
-	attr->stackaddr_attr = NULL;
-	attr->flags &= ~THR_STACK_USER;
+	stacksize = round_up(stacksize);
+	guardsize = round_up(guardsize);
 
 	/*
 	 * Use the garbage collector lock for synchronization of the
@@ -223,7 +218,7 @@ _thr_stack_alloc(struct pthread_attr *attr)
 		if ((spare_stack = LIST_FIRST(&dstackq)) != NULL) {
 			/* Use the spare stack. */
 			LIST_REMOVE(spare_stack, qe);
-			attr->stackaddr_attr = spare_stack->stackaddr;
+			stackaddr = spare_stack->stackaddr;
 		}
 	}
 	/*
@@ -236,12 +231,12 @@ _thr_stack_alloc(struct pthread_attr *attr)
 			if (spare_stack->stacksize == stacksize &&
 			    spare_stack->guardsize == guardsize) {
 				LIST_REMOVE(spare_stack, qe);
-				attr->stackaddr_attr = spare_stack->stackaddr;
+				stackaddr = spare_stack->stackaddr;
 				break;
 			}
 		}
 	}
-	if (attr->stackaddr_attr != NULL) {
+	if (stackaddr != NULL) {
 		/* A cached stack was found.  Release the lock. */
 		THREAD_LIST_UNLOCK(curthread);
 	}
@@ -282,37 +277,31 @@ _thr_stack_alloc(struct pthread_attr *attr)
 				munmap(stackaddr, stacksize + guardsize);
 			stackaddr = NULL;
 		}
-		attr->stackaddr_attr = stackaddr;
 	}
-	if (attr->stackaddr_attr != NULL)
-		return (0);
-	else
-		return (-1);
+	return (stackaddr);
 }
 
 /* This function must be called with _thread_list_lock held. */
 void
-_thr_stack_free(struct pthread_attr *attr)
+_thr_stack_free(void *stackaddr, size_t stacksize, size_t guardsize)
 {
 	struct stack *spare_stack;
 
-	if ((attr != NULL) && ((attr->flags & THR_STACK_USER) == 0)
-	    && (attr->stackaddr_attr != NULL)) {
-		spare_stack = (struct stack *)
-			((char *)attr->stackaddr_attr +
-			attr->stacksize_attr - sizeof(struct stack));
-		spare_stack->stacksize = round_up(attr->stacksize_attr);
-		spare_stack->guardsize = round_up(attr->guardsize_attr);
-		spare_stack->stackaddr = attr->stackaddr_attr;
+	if (!stackaddr)
+		return;
 
-		if (spare_stack->stacksize == THR_STACK_DEFAULT &&
-		    spare_stack->guardsize == _thr_guard_default) {
-			/* Default stack/guard size. */
-			LIST_INSERT_HEAD(&dstackq, spare_stack, qe);
-		} else {
-			/* Non-default stack/guard size. */
-			LIST_INSERT_HEAD(&mstackq, spare_stack, qe);
-		}
-		attr->stackaddr_attr = NULL;
+	spare_stack = (struct stack *)
+	    ((char *)stackaddr + stacksize - sizeof(struct stack));
+	spare_stack->stacksize = round_up(stacksize);
+	spare_stack->guardsize = round_up(guardsize);
+	spare_stack->stackaddr = stackaddr;
+
+	if (spare_stack->stacksize == THR_STACK_DEFAULT &&
+	    spare_stack->guardsize == _thr_guard_default) {
+		/* Default stack/guard size. */
+		LIST_INSERT_HEAD(&dstackq, spare_stack, qe);
+	} else {
+		/* Non-default stack/guard size. */
+		LIST_INSERT_HEAD(&mstackq, spare_stack, qe);
 	}
 }
