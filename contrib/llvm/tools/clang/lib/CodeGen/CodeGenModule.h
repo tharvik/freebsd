@@ -1213,6 +1213,9 @@ private:
   /// Check whether we can use a "simpler", more core exceptions personality
   /// function.
   void SimplifyPersonality();
+
+  /// Emit a note indicating that the module needs safestack runtime
+  void EmitSafestackNote();
 };
 }  // end namespace CodeGen
 }  // end namespace clang

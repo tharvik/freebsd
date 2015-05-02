@@ -19,6 +19,7 @@
 #include "llvm/IR/GetElementPtrTypeIterator.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
 
@@ -28,6 +29,7 @@ class Function;
 class BranchInst;
 class Instruction;
 class DbgDeclareInst;
+class DbgValueInst;
 class StoreInst;
 class LoadInst;
 class Value;
@@ -275,10 +277,19 @@ bool LowerDbgDeclare(Function &F);
 /// an alloca, if any.
 DbgDeclareInst *FindAllocaDbgDeclare(Value *V);
 
+/// FindAllocaDbgValue - Finds all llvm.dbg.value intrinsic corresponding to
+/// an alloca, if any.
+SmallVector<DbgValueInst*, 16> FindAllocaDbgValue(Value *V);
+
 /// replaceDbgDeclareForAlloca - Replaces llvm.dbg.declare instruction when
 /// alloca is replaced with a new value.
 bool replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
                                 DIBuilder &Builder);
+
+/// replaceDbgValueForAlloca - Replaces llvm.dbg.value that use AI when
+/// alloca is replaced with a new value.
+bool replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                              DIBuilder &Builder);
 
 /// \brief Remove all blocks that can not be reached from the function's entry.
 ///

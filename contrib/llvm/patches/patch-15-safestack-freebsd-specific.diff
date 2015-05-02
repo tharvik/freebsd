@@ -1,0 +1,227 @@
+diff --git include/llvm/Transforms/Utils/Local.h include/llvm/Transforms/Utils/Local.h
+index 1484411..b8fb1ef 100644
+--- include/llvm/Transforms/Utils/Local.h
++++ include/llvm/Transforms/Utils/Local.h
+@@ -19,6 +19,7 @@
+ #include "llvm/IR/GetElementPtrTypeIterator.h"
+ #include "llvm/IR/IRBuilder.h"
+ #include "llvm/IR/Operator.h"
++#include "llvm/ADT/SmallVector.h"
+ 
+ namespace llvm {
+ 
+@@ -28,6 +29,7 @@ class Function;
+ class BranchInst;
+ class Instruction;
+ class DbgDeclareInst;
++class DbgValueInst;
+ class StoreInst;
+ class LoadInst;
+ class Value;
+@@ -275,11 +277,20 @@ bool LowerDbgDeclare(Function &F);
+ /// an alloca, if any.
+ DbgDeclareInst *FindAllocaDbgDeclare(Value *V);
+ 
++/// FindAllocaDbgValue - Finds all llvm.dbg.value intrinsic corresponding to
++/// an alloca, if any.
++SmallVector<DbgValueInst*, 16> FindAllocaDbgValue(Value *V);
++
+ /// replaceDbgDeclareForAlloca - Replaces llvm.dbg.declare instruction when
+ /// alloca is replaced with a new value.
+ bool replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                                 DIBuilder &Builder);
+ 
++/// replaceDbgValueForAlloca - Replaces llvm.dbg.value that use AI when
++/// alloca is replaced with a new value.
++bool replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
++                              DIBuilder &Builder);
++
+ /// \brief Remove all blocks that can not be reached from the function's entry.
+ ///
+ /// Returns true if any basic block was removed.
+diff --git lib/Target/X86/X86TargetTransformInfo.cpp lib/Target/X86/X86TargetTransformInfo.cpp
+index e663a19..cda9556 100644
+--- lib/Target/X86/X86TargetTransformInfo.cpp
++++ lib/Target/X86/X86TargetTransformInfo.cpp
+@@ -1202,6 +1202,17 @@ bool X86TTI::getUnsafeStackPtrLocation(unsigned &AddressSpace,
+    * function above). Doing so requires changing the tcbhead_t struct in glibc
+    * on Linux and tcb struct in libc on FreeBSD.
+    */
++  if (ST->isTargetFreeBSD() &&
++      TLI->getTargetMachine().getCodeModel() != CodeModel::Kernel) {
++    if (ST->is32Bit())
++      AddressSpace = 256; // X86::GS;
++    else if (ST->is64Bit())
++      AddressSpace = 257; // X86::FS;
++    else
++      return false;
++    Offset = 3 * (ST->getDataLayout()->getPointerSize());
++    return true;
++  }
+ 
+   // By default, the unsafe stack pointer will be stored in a thread-local
+   // variable with a predefined name.
+diff --git lib/Transforms/Instrumentation/SafeStack.cpp lib/Transforms/Instrumentation/SafeStack.cpp
+index 0a2fd5c..ae058c4 100644
+--- lib/Transforms/Instrumentation/SafeStack.cpp
++++ lib/Transforms/Instrumentation/SafeStack.cpp
+@@ -267,7 +267,7 @@ Constant *SafeStack::getOrCreateUnsafeStackPtr(Function &F) {
+           /*ThreadLocalMode=*/GlobalValue::InitialExecTLSModel);
+     } else {
+       // The variable exists, check its type and attributes
+-      if (UnsafeStackPtr->getType() != Int8Ty->getPointerTo()) {
++      if (UnsafeStackPtr->getType() != Int8Ty->getPointerTo()->getPointerTo()) {
+         report_fatal_error(Twine(unsafe_stack_ptr_var) +
+                            " must have void* type");
+       }
+@@ -413,6 +413,7 @@ bool SafeStack::runOnFunction(Function &F) {
+ 
+       // Replace alloc with the new location
+       replaceDbgDeclareForAlloca(AI, NewAI, DIB);
++      replaceDbgValueForAlloca(AI, NewAI, DIB);
+       AI->replaceAllUsesWith(NewAI);
+       AI->eraseFromParent();
+     }
+@@ -503,6 +504,7 @@ bool SafeStack::runOnFunction(Function &F) {
+       NewAI->takeName(AI);
+ 
+     replaceDbgDeclareForAlloca(AI, NewAI, DIB);
++    replaceDbgValueForAlloca(AI, NewAI, DIB);
+     AI->replaceAllUsesWith(NewAI);
+     AI->eraseFromParent();
+   }
+diff --git lib/Transforms/Utils/Local.cpp lib/Transforms/Utils/Local.cpp
+index 2a84d7e..9a016f8 100644
+--- lib/Transforms/Utils/Local.cpp
++++ lib/Transforms/Utils/Local.cpp
+@@ -1103,6 +1103,19 @@ DbgDeclareInst *llvm::FindAllocaDbgDeclare(Value *V) {
+   return nullptr;
+ }
+ 
++/// FindAllocaDbgValue - Finds all llvm.dbg.value intrinsic corresponding to
++/// an alloca, if any.
++SmallVector<DbgValueInst*, 16> llvm::FindAllocaDbgValue(Value *V) {
++  SmallVector<DbgValueInst*, 16> DVIs;
++  if (auto *L = LocalAsMetadata::getIfExists(V))
++    if (auto *MDV = MetadataAsValue::getIfExists(V->getContext(), L))
++      for (User *U : MDV->users())
++        if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(U))
++          DVIs.push_back(DVI);
++
++  return DVIs;
++}
++
+ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                                       DIBuilder &Builder) {
+   DbgDeclareInst *DDI = FindAllocaDbgDeclare(AI);
+@@ -1134,6 +1147,45 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+   return true;
+ }
+ 
++bool llvm::replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
++                                    DIBuilder &Builder) {
++  SmallVector<DbgValueInst*, 16> DVIs = FindAllocaDbgValue(AI);
++
++  for (DbgValueInst *DVI: DVIs) {
++    assert(DVI->getValue() == AI);
++
++    uint64_t DIOffset = DVI->getOffset();
++    DIVariable DIVar(DVI->getVariable());
++    DIExpression DIExpr(DVI->getExpression());
++
++    // FIXME: it seems that DW_OP_deref is ignored in this context?
++
++    // Create a copy of the original DIDescriptor for user variable, appending
++    // "deref" operation to a list of address elements, as new llvm.dbg.value
++    // will take a value storing address of the memory for variable, not
++    // alloca itself.
++    SmallVector<int64_t, 4> NewDIExpr;
++    if (DIExpr) {
++      for (unsigned i = 0, n = DIExpr.getNumElements(); i < n; ++i) {
++        NewDIExpr.push_back(DIExpr.getElement(i));
++      }
++    }
++
++    // This forces DwarfDebug::emitDebugLocValue to use DW_OP_bref mode
++    // and not treat the location as being in-register
++    NewDIExpr.push_back(dwarf::DW_OP_plus);
++    NewDIExpr.push_back(0);
++
++    // Insert llvm.dbg.value right next to the original llvm.dbg.value and
++    // remove the original one.
++    Builder.insertDbgValueIntrinsic(NewAllocaAddress, DIOffset, DIVar,
++                                    Builder.createExpression(NewDIExpr), DVI);
++    DVI->eraseFromParent();
++  }
++
++  return true;
++}
++
+ /// changeToUnreachable - Insert an unreachable instruction before the specified
+ /// instruction, making it and the rest of the code in the block dead.
+ static void changeToUnreachable(Instruction *I, bool UseLLVMTrap) {
+diff --git tools/clang/lib/CodeGen/CodeGenModule.cpp tools/clang/lib/CodeGen/CodeGenModule.cpp
+index 2cfab6b..fe9c497 100644
+--- tools/clang/lib/CodeGen/CodeGenModule.cpp
++++ tools/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -356,6 +356,9 @@ void CodeGenModule::Release() {
+     CoverageMapping->emit();
+   emitLLVMUsed();
+ 
++  if (LangOpts.getStackProtector() == LangOptions::SSPSafeStack)
++    EmitSafestackNote();
++
+   if (CodeGenOpts.Autolink &&
+       (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
+     EmitModuleLinkOptions();
+@@ -3593,3 +3596,23 @@ void CodeGenModule::EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D) {
+   }
+ }
+ 
++void CodeGenModule::EmitSafestackNote() {
++  static const char NoteName[] = "safestack";
++
++  if (getTarget().getTriple().isOSFreeBSD()) {
++    llvm::Constant *Fields[5] = {
++      llvm::ConstantInt::get(Int32Ty, sizeof(NoteName)), // namesz
++      llvm::ConstantInt::get(Int32Ty, sizeof(int32_t)),  // descsz
++      llvm::ConstantInt::get(Int32Ty, 0), // type = 0
++      llvm::ConstantDataArray::getString(VMContext, NoteName),
++      llvm::ConstantInt::get(Int32Ty, 0), // desc = 0
++    };
++
++    llvm::Constant *V = llvm::ConstantStruct::getAnon(Fields, true);
++    llvm::GlobalVariable *GV = new llvm::GlobalVariable(
++                getModule(), V->getType(), true,
++                llvm::GlobalVariable::WeakAnyLinkage, V, "safestack_tag");
++    GV->setAlignment(4);
++    GV->setSection(".note.safestack");
++  }
++}
+diff --git tools/clang/lib/CodeGen/CodeGenModule.h tools/clang/lib/CodeGen/CodeGenModule.h
+index 2aafe7e..be22632 100644
+--- tools/clang/lib/CodeGen/CodeGenModule.h
++++ tools/clang/lib/CodeGen/CodeGenModule.h
+@@ -1213,6 +1213,9 @@ private:
+   /// Check whether we can use a "simpler", more core exceptions personality
+   /// function.
+   void SimplifyPersonality();
++
++  /// Emit a note indicating that the module needs safestack runtime
++  void EmitSafestackNote();
+ };
+ }  // end namespace CodeGen
+ }  // end namespace clang
+diff --git tools/clang/lib/Driver/Tools.cpp tools/clang/lib/Driver/Tools.cpp
+index 4593545..669182c 100644
+--- tools/clang/lib/Driver/Tools.cpp
++++ tools/clang/lib/Driver/Tools.cpp
+@@ -6740,8 +6740,6 @@ void freebsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
+     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtbegin)));
+   }
+ 
+-  addSafeStackRT(getToolChain(), Args, CmdArgs);
+-
+   Args.AddAllArgs(CmdArgs, options::OPT_L);
+   const ToolChain::path_list &Paths = ToolChain.getFilePaths();
+   for (const auto &Path : Paths)

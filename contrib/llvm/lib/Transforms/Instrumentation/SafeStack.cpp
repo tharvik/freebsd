@@ -267,7 +267,7 @@ Constant *SafeStack::getOrCreateUnsafeStackPtr(Function &F) {
           /*ThreadLocalMode=*/GlobalValue::InitialExecTLSModel);
     } else {
       // The variable exists, check its type and attributes
-      if (UnsafeStackPtr->getType() != Int8Ty->getPointerTo()) {
+      if (UnsafeStackPtr->getType() != Int8Ty->getPointerTo()->getPointerTo()) {
         report_fatal_error(Twine(unsafe_stack_ptr_var) +
                            " must have void* type");
       }
@@ -413,6 +413,7 @@ bool SafeStack::runOnFunction(Function &F) {
 
       // Replace alloc with the new location
       replaceDbgDeclareForAlloca(AI, NewAI, DIB);
+      replaceDbgValueForAlloca(AI, NewAI, DIB);
       AI->replaceAllUsesWith(NewAI);
       AI->eraseFromParent();
     }
@@ -503,6 +504,7 @@ bool SafeStack::runOnFunction(Function &F) {
       NewAI->takeName(AI);
 
     replaceDbgDeclareForAlloca(AI, NewAI, DIB);
+    replaceDbgValueForAlloca(AI, NewAI, DIB);
     AI->replaceAllUsesWith(NewAI);
     AI->eraseFromParent();
   }

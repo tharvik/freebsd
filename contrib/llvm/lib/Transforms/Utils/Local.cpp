@@ -1103,6 +1103,19 @@ DbgDeclareInst *llvm::FindAllocaDbgDeclare(Value *V) {
   return nullptr;
 }
 
+/// FindAllocaDbgValue - Finds all llvm.dbg.value intrinsic corresponding to
+/// an alloca, if any.
+SmallVector<DbgValueInst*, 16> llvm::FindAllocaDbgValue(Value *V) {
+  SmallVector<DbgValueInst*, 16> DVIs;
+  if (auto *L = LocalAsMetadata::getIfExists(V))
+    if (auto *MDV = MetadataAsValue::getIfExists(V->getContext(), L))
+      for (User *U : MDV->users())
+        if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(U))
+          DVIs.push_back(DVI);
+
+  return DVIs;
+}
+
 bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
                                       DIBuilder &Builder) {
   DbgDeclareInst *DDI = FindAllocaDbgDeclare(AI);
@@ -1131,6 +1144,45 @@ bool llvm::replaceDbgDeclareForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
   Builder.insertDeclare(NewAllocaAddress, DIVar,
                         Builder.createExpression(NewDIExpr), BB);
   DDI->eraseFromParent();
+  return true;
+}
+
+bool llvm::replaceDbgValueForAlloca(AllocaInst *AI, Value *NewAllocaAddress,
+                                    DIBuilder &Builder) {
+  SmallVector<DbgValueInst*, 16> DVIs = FindAllocaDbgValue(AI);
+
+  for (DbgValueInst *DVI: DVIs) {
+    assert(DVI->getValue() == AI);
+
+    uint64_t DIOffset = DVI->getOffset();
+    DIVariable DIVar(DVI->getVariable());
+    DIExpression DIExpr(DVI->getExpression());
+
+    // FIXME: it seems that DW_OP_deref is ignored in this context?
+
+    // Create a copy of the original DIDescriptor for user variable, appending
+    // "deref" operation to a list of address elements, as new llvm.dbg.value
+    // will take a value storing address of the memory for variable, not
+    // alloca itself.
+    SmallVector<int64_t, 4> NewDIExpr;
+    if (DIExpr) {
+      for (unsigned i = 0, n = DIExpr.getNumElements(); i < n; ++i) {
+        NewDIExpr.push_back(DIExpr.getElement(i));
+      }
+    }
+
+    // This forces DwarfDebug::emitDebugLocValue to use DW_OP_bref mode
+    // and not treat the location as being in-register
+    NewDIExpr.push_back(dwarf::DW_OP_plus);
+    NewDIExpr.push_back(0);
+
+    // Insert llvm.dbg.value right next to the original llvm.dbg.value and
+    // remove the original one.
+    Builder.insertDbgValueIntrinsic(NewAllocaAddress, DIOffset, DIVar,
+                                    Builder.createExpression(NewDIExpr), DVI);
+    DVI->eraseFromParent();
+  }
+
   return true;
 }
 

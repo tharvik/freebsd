@@ -356,6 +356,9 @@ void CodeGenModule::Release() {
     CoverageMapping->emit();
   emitLLVMUsed();
 
+  if (LangOpts.getStackProtector() == LangOptions::SSPSafeStack)
+    EmitSafestackNote();
+
   if (CodeGenOpts.Autolink &&
       (Context.getLangOpts().Modules || !LinkerOptionsMetadata.empty())) {
     EmitModuleLinkOptions();
@@ -3593,3 +3596,23 @@ void CodeGenModule::EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D) {
   }
 }
 
+void CodeGenModule::EmitSafestackNote() {
+  static const char NoteName[] = "safestack";
+
+  if (getTarget().getTriple().isOSFreeBSD()) {
+    llvm::Constant *Fields[5] = {
+      llvm::ConstantInt::get(Int32Ty, sizeof(NoteName)), // namesz
+      llvm::ConstantInt::get(Int32Ty, sizeof(int32_t)),  // descsz
+      llvm::ConstantInt::get(Int32Ty, 0), // type = 0
+      llvm::ConstantDataArray::getString(VMContext, NoteName),
+      llvm::ConstantInt::get(Int32Ty, 0), // desc = 0
+    };
+
+    llvm::Constant *V = llvm::ConstantStruct::getAnon(Fields, true);
+    llvm::GlobalVariable *GV = new llvm::GlobalVariable(
+                getModule(), V->getType(), true,
+                llvm::GlobalVariable::WeakAnyLinkage, V, "safestack_tag");
+    GV->setAlignment(4);
+    GV->setSection(".note.safestack");
+  }
+}
