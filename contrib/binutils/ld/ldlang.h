@@ -439,6 +439,7 @@ struct lang_definedness_hash_entry
 
 struct orphan_save {
   const char *name;
+  int name_only;
   flagword flags;
   lang_output_section_statement_type *os;
   asection **section;

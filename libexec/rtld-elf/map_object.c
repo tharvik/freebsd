@@ -153,12 +153,16 @@ map_object(int fd, const char *path, const struct stat *sb)
 
 	case PT_NOTE:
 	    if (phdr->p_offset > PAGE_SIZE ||
-	      phdr->p_offset + phdr->p_filesz > PAGE_SIZE)
+	      phdr->p_offset + phdr->p_filesz > PAGE_SIZE) {
+		dbg("note section beyond PAGE_SIZE, ignoring");
 		break;
+	    }
 	    notes[++nrnotes].note_start =
 		(Elf_Addr)(char *)hdr + phdr->p_offset;
 	    notes[nrnotes].note_end =
 		notes[nrnotes].note_start + phdr->p_filesz;
+	    dbg("note section: %p - %p", (void *) notes[nrnotes].note_start,
+		(void *) notes[nrnotes].note_end);
 	    break;
 	}
 

@@ -39,7 +39,7 @@ extern char **environ;
  * present in this program.
  */
 static inline int
-check_safestack_note(void) {
+has_safestack_note(void) {
 	Elf_Addr *sp;
 	Elf_Auxinfo *aux, *auxp;
 	Elf_Phdr *phdr;
@@ -80,9 +80,11 @@ check_safestack_note(void) {
 		    roundup2(note->n_namesz, sizeof(Elf32_Addr)) +
 		    roundup2(note->n_descsz, sizeof(Elf32_Addr)))) {
 			note_name = (const char *)(note + 1);
-			if (note->n_namesz == sizeof(NOTE_SAFESTACK_NAME) &&
-			    strncmp(NOTE_SAFESTACK_NAME, note_name,
-			    sizeof(NOTE_SAFESTACK_NAME)) == 0) {
+			if (note->n_namesz == sizeof(NOTE_SAFESTACK_VENDOR) &&
+			    note->n_descsz == sizeof(int32_t) &&
+			    strncmp(NOTE_SAFESTACK_VENDOR, note_name,
+			    sizeof(NOTE_SAFESTACK_VENDOR)) == 0 &&
+                            note->n_type == SAFESTACK_NOTETYPE) {
 				return 1;
 			}
 		}
@@ -97,8 +99,6 @@ check_safestack_note(void) {
 static inline void
 init_safestack(void)
 {
-	if (check_safestack_note())
+	if (has_safestack_note())
 		__safestack_init();
 }
-
-

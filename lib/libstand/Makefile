@@ -6,10 +6,9 @@
 #   quite large.
 #
 
+.include <src.opts.mk>
 MK_PROFILE=	no
 MK_SSP=		no
-
-.include <src.opts.mk>
 
 LIB=		stand
 NO_PIC=

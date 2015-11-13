@@ -1351,14 +1351,17 @@ digest_notes(Obj_Entry *obj, Elf_Addr note_start, Elf_Addr note_end)
 	const char *note_name;
 	uintptr_t p;
 
+	dbg("digest_notes %p - %p", (void *) note_start, (void *) note_end);
 	for (note = (const Elf_Note *)note_start; (Elf_Addr)note < note_end;
 	    note = (const Elf_Note *)((const char *)(note + 1) +
 	      roundup2(note->n_namesz, sizeof(Elf32_Addr)) +
 	      roundup2(note->n_descsz, sizeof(Elf32_Addr)))) {
 		note_name = (const char *)(note + 1);
-		if (note->n_namesz == sizeof(NOTE_SAFESTACK_NAME) &&
-		    strncmp(NOTE_SAFESTACK_NAME, note_name,
-		    sizeof(NOTE_SAFESTACK_NAME)) == 0) {
+		if (note->n_namesz == sizeof(NOTE_SAFESTACK_VENDOR) &&
+		    note->n_descsz == sizeof(int32_t) &&
+		    strncmp(NOTE_SAFESTACK_VENDOR, note_name,
+		    sizeof(NOTE_SAFESTACK_VENDOR)) == 0 &&
+		    note->n_type == SAFESTACK_NOTETYPE) {
 			obj->safestack = true;
 			dbg("note safestack");
 			continue;

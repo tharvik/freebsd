@@ -2,10 +2,9 @@
 
 SHLIBDIR?=	/lib
 
+.include <bsd.own.mk>
 MK_PROFILE=	no
 MK_SSP=		no
-
-.include <bsd.own.mk>
 
 GCCDIR=	${.CURDIR}/../../../contrib/gcc
 GCCLIB=	${.CURDIR}/../../../contrib/gcclibs

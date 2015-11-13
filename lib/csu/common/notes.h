@@ -28,14 +28,14 @@
 #ifndef	CSU_COMMON_NOTES_H
 #define	CSU_COMMON_NOTES_H
 
-#define NOTE_FREEBSD_VENDOR	"FreeBSD"
-
 #define NOTE_SECTION		".note.tag"
 
+#define NOTE_FREEBSD_VENDOR	"FreeBSD"
 #define ABI_NOTETYPE		1
 #define	CRT_NOINIT_NOTETYPE	2
 #define	ARCH_NOTETYPE		3
 
-#define NOTE_SAFESTACK_NAME	"safestack"
+#define NOTE_SAFESTACK_VENDOR	"SafeStack"
+#define SAFESTACK_NOTETYPE      1
 
 #endif

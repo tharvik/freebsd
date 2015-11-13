@@ -6738,6 +6738,12 @@ void freebsd::Link::ConstructJob(Compilation &C, const JobAction &JA,
       crtbegin = "crtbegin.o";
 
     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtbegin)));
+
+    if (Args.hasFlag(options::OPT_fsafe_stack,
+                     options::OPT_fno_safe_stack, false)) {
+        CmdArgs.push_back(
+                Args.MakeArgString(ToolChain.GetFilePath("safestack_tag.o")));
+    }
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);

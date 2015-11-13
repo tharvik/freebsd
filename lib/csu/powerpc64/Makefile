@@ -9,6 +9,9 @@ CFLAGS+=	-I${.CURDIR}/../common \
 		-I${.CURDIR}/../../libc/include \
 		-mlongcall
 
+SRCS+=		${.CURDIR}/../common/safestack_tag.c
+OBJS+=		safestack_tag.o
+
 # XXX: See the log for r232932 as to why the above -mlongcall is needed.  Since
 # clang doesn't support -mlongcall, and testing shows a clang linked with a
 # clang-built csu segfaults, this must currently be compiled with gcc.  Once
@@ -19,7 +22,7 @@ COMPILER_TYPE:=	gcc
 all: ${OBJS}
 
 CLEANFILES=	${OBJS}
-CLEANFILES+=	crt1.s gcrt1.s Scrt1.s
+CLEANFILES+=	crt1.s gcrt1.s Scrt1.s safestack_tag.s
 
 # See the comment in lib/csu/common/crtbrand.c for the reason crt1.c is not
 # directly compiled to .o files.
@@ -44,6 +47,13 @@ Scrt1.s: crt1.c
 
 Scrt1.o: Scrt1.s
 	${CC} ${ACFLAGS} -c -o ${.TARGET} Scrt1.s
+
+safestack_tag.s: ${.CURDIR}/../common/safestack_tag.c
+	${CC} ${CFLAGS} -S -o ${.TARGET} ${.CURDIR}/../common/safestack_tag.c
+	sed ${SED_FIX_NOTE} ${.TARGET}
+
+safestack_tag.o: safestack_tag.s
+	${CC} ${ACFLAGS} -c -o ${.TARGET} safestack_tag.s
 
 realinstall:
 	${INSTALL} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \

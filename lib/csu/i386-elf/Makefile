@@ -8,10 +8,13 @@ OBJS+=		gcrt1.o crt1.o Scrt1.o
 CFLAGS+=	-I${.CURDIR}/../common \
 		-I${.CURDIR}/../../libc/include
 
+SRCS+=		${.CURDIR}/../common/safestack_tag.c
+OBJS+=		safestack_tag.o
+
 all: ${OBJS}
 
 CLEANFILES=	${OBJS} crt1_c.o crt1_s.o gcrt1_c.o Scrt1_c.o
-CLEANFILES+=	crt1_c.s gcrt1_c.s Scrt1_c.s
+CLEANFILES+=	crt1_c.s gcrt1_c.s Scrt1_c.s safestack_tag.s
 
 # See the comment in lib/csu/common/crtbrand.c for the reason crt1_c.c is not
 # directly compiled to .o files.
@@ -47,6 +50,13 @@ Scrt1_c.o: Scrt1_c.s
 Scrt1.o: Scrt1_c.o crt1_s.o
 	${LD} ${_LDFLAGS} -o Scrt1.o -r crt1_s.o Scrt1_c.o
 	${OBJCOPY} --localize-symbol _start1 Scrt1.o
+
+safestack_tag.s: ${.CURDIR}/../common/safestack_tag.c
+	${CC} ${CFLAGS} -S -o ${.TARGET} ${.CURDIR}/../common/safestack_tag.c
+	sed ${SED_FIX_NOTE} ${.TARGET}
+
+safestack_tag.o: safestack_tag.s
+	${CC} ${ACFLAGS} -c -o ${.TARGET} safestack_tag.s
 
 realinstall:
 	${INSTALL} -o ${LIBOWN} -g ${LIBGRP} -m ${LIBMODE} \

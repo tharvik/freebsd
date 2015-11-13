@@ -3597,6 +3597,7 @@ void CodeGenModule::EmitOMPThreadPrivateDecl(const OMPThreadPrivateDecl *D) {
 }
 
 void CodeGenModule::EmitSafestackNote() {
+#if 0
   static const char NoteName[] = "safestack";
 
   if (getTarget().getTriple().isOSFreeBSD()) {
@@ -3611,8 +3612,9 @@ void CodeGenModule::EmitSafestackNote() {
     llvm::Constant *V = llvm::ConstantStruct::getAnon(Fields, true);
     llvm::GlobalVariable *GV = new llvm::GlobalVariable(
                 getModule(), V->getType(), true,
-                llvm::GlobalVariable::WeakAnyLinkage, V, "safestack_tag");
+                llvm::GlobalVariable::LinkOnceODRLinkage, V, "safestack_tag");
     GV->setAlignment(4);
-    GV->setSection(".note.safestack");
+    GV->setSection(".note");
   }
+#endif
 }

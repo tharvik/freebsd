@@ -1414,25 +1414,25 @@ gld${EMULATION_NAME}_place_orphan (asection *s)
 {
   static struct orphan_save hold[] =
     {
-      { ".text",
+      { ".text", 0,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_READONLY | SEC_CODE,
 	0, 0, 0, 0 },
-      { ".rodata",
+      { ".rodata", 0,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_READONLY | SEC_DATA,
 	0, 0, 0, 0 },
-      { ".data",
+      { ".data", 0,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_DATA,
 	0, 0, 0, 0 },
-      { ".bss",
+      { ".bss", 0,
 	SEC_ALLOC,
 	0, 0, 0, 0 },
-      { 0,
+      { 0, 0,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_READONLY | SEC_DATA,
 	0, 0, 0, 0 },
-      { ".interp",
+      { ".interp", 1,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_READONLY | SEC_DATA,
 	0, 0, 0, 0 },
-      { ".sdata",
+      { ".sdata", 0,
 	SEC_HAS_CONTENTS | SEC_ALLOC | SEC_LOAD | SEC_DATA | SEC_SMALL_DATA,
 	0, 0, 0, 0 }
     };
@@ -1570,7 +1570,7 @@ gld${EMULATION_NAME}_place_orphan (asection *s)
 	    place->os = output_rel_find (s, isdyn);
 	}
       after = place->os;
-      if (after == NULL)
+      if (after == NULL && !place->name_only)
 	after = lang_output_section_find_by_flags
 	  (s, &place->os, _bfd_elf_match_sections_by_type);
       if (after == NULL)

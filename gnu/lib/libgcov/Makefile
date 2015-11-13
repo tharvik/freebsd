@@ -1,9 +1,9 @@
 # $FreeBSD$
 
+.include <src.opts.mk>
 MK_PROFILE=	no
 MK_SSP=		no
 
-.include <src.opts.mk>
 .include "${.CURDIR}/../../usr.bin/cc/Makefile.tgt"
 
 GCCDIR=	${.CURDIR}/../../../contrib/gcc
