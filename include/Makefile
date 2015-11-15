@@ -19,7 +19,8 @@ INCS=	a.out.h ar.h assert.h bitstring.h complex.h cpio.h _ctype.h ctype.h \
 	netdb.h nl_types.h nlist.h nss.h nsswitch.h paths.h \
 	printf.h proc_service.h pthread.h \
 	pthread_np.h pwd.h ranlib.h readpassphrase.h regex.h \
-	res_update.h resolv.h runetype.h search.h semaphore.h setjmp.h \
+	res_update.h resolv.h runetype.h safestack.h \
+	search.h semaphore.h setjmp.h \
 	signal.h spawn.h stab.h stdalign.h stdbool.h stddef.h \
 	stdnoreturn.h stdio.h stdlib.h string.h stringlist.h \
 	strings.h sysexits.h tar.h termios.h tgmath.h \

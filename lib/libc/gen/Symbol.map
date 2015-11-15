@@ -540,4 +540,8 @@ FBSDprivate_1.0 {
 	__fillcontextx;
 	__fillcontextx2;
 	__getcontextx_size;
+
+	__safestack_init;
+	__safestack_enabled;
+	__safestack_unsafe_stack_ptr;
 };

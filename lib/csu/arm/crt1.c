@@ -47,6 +47,7 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "crtbrand.c"
 #include "ignore_init.c"
+#include "init_safestack.c"
 
 struct Struct_Obj_Entry;
 struct ps_strings;
@@ -99,8 +100,10 @@ __start(int argc, char **argv, char **env, struct ps_strings *ps_strings,
 
 	if (&_DYNAMIC != NULL)
 		atexit(cleanup);
-	else
+	else {
 		_init_tls();
+		init_safestack();
+	}
 #ifdef GCRT
 	atexit(_mcleanup);
 	monstartup(&eprol, &etext);

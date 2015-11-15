@@ -86,8 +86,11 @@ map_object(int fd, const char *path, const struct stat *sb)
     Elf_Word stack_flags;
     Elf_Addr relro_page;
     size_t relro_size;
-    Elf_Addr note_start;
-    Elf_Addr note_end;
+    struct {
+        Elf_Addr note_start;
+        Elf_Addr note_end;
+    } *notes;
+    int nrnotes;
     char *note_map;
     size_t note_map_len;
 
@@ -104,14 +107,14 @@ map_object(int fd, const char *path, const struct stat *sb)
     phsize  = hdr->e_phnum * sizeof (phdr[0]);
     phlimit = phdr + hdr->e_phnum;
     nsegs = -1;
+    nrnotes = -1;
     phdyn = phinterp = phtls = NULL;
     phdr_vaddr = 0;
     relro_page = 0;
     relro_size = 0;
-    note_start = 0;
-    note_end = 0;
     note_map = NULL;
     segs = alloca(sizeof(segs[0]) * hdr->e_phnum);
+    notes = alloca(sizeof(notes[0]) * hdr->e_phnum);
     stack_flags = RTLD_DEFAULT_STACK_PF_EXEC | PF_R | PF_W;
     while (phdr < phlimit) {
 	switch (phdr->p_type) {
@@ -151,7 +154,8 @@ map_object(int fd, const char *path, const struct stat *sb)
 	    relro_size = phdr->p_memsz;
 	    break;
 
-	case PT_NOTE:
+	case PT_NOTE: {
+	    Elf_Addr note_start, note_end;
 	    if (phdr->p_offset > PAGE_SIZE ||
 	      phdr->p_offset + phdr->p_filesz > PAGE_SIZE) {
 		note_map_len = round_page(phdr->p_offset +
@@ -168,7 +172,10 @@ map_object(int fd, const char *path, const struct stat *sb)
 		note_start = (Elf_Addr)(char *)hdr + phdr->p_offset;
 	    }
 	    note_end = note_start + phdr->p_filesz;
+	    notes[++nrnotes].note_start = note_start;
+	    notes[nrnotes].note_end = note_end;
 	    break;
+	  }
 	}
 
 	++phdr;
@@ -307,8 +314,12 @@ map_object(int fd, const char *path, const struct stat *sb)
     obj->stack_flags = stack_flags;
     obj->relro_page = obj->relocbase + trunc_page(relro_page);
     obj->relro_size = round_page(relro_size);
-    if (note_start < note_end)
-	digest_notes(obj, note_start, note_end);
+    if (nrnotes >= 0) {
+	for (i = 0; i <= nrnotes; i++) {
+	    if (notes[i].note_start < notes[i].note_end)
+		digest_notes(obj, notes[i].note_start, notes[i].note_end);
+	}
+    }
     if (note_map != NULL)
 	munmap(note_map, note_map_len);
     munmap(hdr, PAGE_SIZE);
