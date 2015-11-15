@@ -106,7 +106,19 @@ _thr_gc(struct pthread *curthread)
 			/* make sure we are not still in userland */
 			continue;
 		}
-		_thr_stack_free(&td->attr);
+		if (!(td->attr.flags & THR_STACK_USER)) {
+			_thr_stack_free(td->attr.stackaddr_attr,
+			    td->attr.stacksize_attr,
+			    td->attr.guardsize_attr);
+			td->attr.stackaddr_attr = NULL;
+		}
+		if (td->attr.unsafestackaddr_attr != NULL) {
+			_thr_stack_free(td->attr.unsafestackaddr_attr,
+			    td->attr.stacksize_attr,
+			    td->attr.guardsize_attr);
+			td->attr.unsafestackaddr_attr = NULL;
+		}
+
 		THR_GCLIST_REMOVE(td);
 		TAILQ_INSERT_HEAD(&worklist, td, gcle);
 	}

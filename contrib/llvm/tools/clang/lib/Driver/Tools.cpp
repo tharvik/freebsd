@@ -4175,6 +4175,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // -stack-protector=0 is default.
   unsigned StackProtectorLevel = 0;
   if (getToolChain().getSanitizerArgs().needsSafeStackRt()) {
+    StackProtectorLevel = LangOptions::SSPSafeStack;
     Args.ClaimAllArgs(options::OPT_fno_stack_protector);
     Args.ClaimAllArgs(options::OPT_fstack_protector_all);
     Args.ClaimAllArgs(options::OPT_fstack_protector_strong);

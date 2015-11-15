@@ -92,6 +92,8 @@ public:
                          Type *Ty);
   bool isLegalMaskedLoad(Type *DataType, int Consecutive);
   bool isLegalMaskedStore(Type *DataType, int Consecutive);
+  bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const;
   bool hasCompatibleFunctionAttributes(const Function *Caller,
                                        const Function *Callee) const;
 

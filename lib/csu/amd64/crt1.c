@@ -32,6 +32,7 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "crtbrand.c"
 #include "ignore_init.c"
+#include "init_safestack.c"
 
 typedef void (*fptr)(void);
 
@@ -59,8 +60,10 @@ _start(char **ap, void (*cleanup)(void))
 
 	if (&_DYNAMIC != NULL)
 		atexit(cleanup);
-	else
+	else {
 		_init_tls();
+		init_safestack();
+	}
 
 #ifdef GCRT
 	atexit(_mcleanup);

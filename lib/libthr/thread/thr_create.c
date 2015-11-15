@@ -38,6 +38,7 @@
 #include <stddef.h>
 #include <pthread.h>
 #include <pthread_np.h>
+#include <safestack.h>
 #include "un-namespace.h"
 
 #include "libc_private.h"
@@ -234,23 +235,47 @@ out:
 static int
 create_stack(struct pthread_attr *pattr)
 {
-	int ret;
-
 	/* Check if a stack was specified in the thread attributes: */
 	if ((pattr->stackaddr_attr) != NULL) {
 		pattr->guardsize_attr = 0;
 		pattr->flags |= THR_STACK_USER;
-		ret = 0;
 	}
-	else
-		ret = _thr_stack_alloc(pattr);
-	return (ret);
+	else {
+		pattr->flags &= ~THR_STACK_USER;
+		pattr->stackaddr_attr = _thr_stack_alloc(
+		    pattr->stacksize_attr, pattr->guardsize_attr);
+		if (!pattr->stackaddr_attr)
+			return (-1);
+	}
+
+	/* Allocate the unsafe stack */
+	if (__safestack_enabled) {
+		pattr->unsafestackaddr_attr = _thr_stack_alloc(
+		    pattr->stacksize_attr, pattr->guardsize_attr);
+		if (!pattr->unsafestackaddr_attr) {
+			if (!(pattr->flags & THR_STACK_USER))
+				_thr_stack_free(pattr->stackaddr_attr,
+				    pattr->stacksize_attr,
+				    pattr->guardsize_attr);
+			return (-1);
+		}
+	} else {
+		pattr->unsafestackaddr_attr = NULL;
+	}
+	return (0);
 }
 
 static void
 thread_start(struct pthread *curthread)
 {
 	sigset_t set;
+
+	/* Initialize the unsafe stack pointer */
+	if (curthread->attr.unsafestackaddr_attr != NULL) {
+		__set_unsafe_stack_ptr(
+		    ((char *) curthread->attr.unsafestackaddr_attr) +
+		    curthread->attr.stacksize_attr);
+	}
 
 	if (curthread->attr.suspend == THR_CREATE_SUSPENDED)
 		set = curthread->sigmask;

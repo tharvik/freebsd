@@ -320,6 +320,11 @@ public:
 
   unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) { return 0; }
 
+  bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const {
+    return false;
+  }
+
   bool getTgtMemIntrinsic(IntrinsicInst *Inst, MemIntrinsicInfo &Info) {
     return false;
   }

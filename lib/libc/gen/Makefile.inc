@@ -100,6 +100,7 @@ SRCS+=	__getosreldate.c \
 	readdir.c \
 	readpassphrase.c \
 	rewinddir.c \
+	safestack.c \
 	scandir.c \
 	seed48.c \
 	seekdir.c \

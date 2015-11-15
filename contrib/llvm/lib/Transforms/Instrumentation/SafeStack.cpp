@@ -177,7 +177,7 @@ class SafeStack : public FunctionPass {
 
   /// \brief Build a constant representing a pointer to the unsafe stack
   /// pointer.
-  Constant *getOrCreateUnsafeStackPtr(Module &M);
+  Constant *getOrCreateUnsafeStackPtr(Function &F);
 
   /// \brief Find all static allocas, dynamic allocas, return instructions and
   /// stack restore points (exception unwind blocks and setjmp calls) in the
@@ -222,6 +222,7 @@ public:
 
   virtual void getAnalysisUsage(AnalysisUsage &AU) const {
     AU.addRequired<AliasAnalysis>();
+    AU.addRequired<TargetTransformInfoWrapperPass>();
   }
 
   virtual bool doInitialization(Module &M) {
@@ -239,35 +240,50 @@ public:
 
 }; // class SafeStack
 
-Constant *SafeStack::getOrCreateUnsafeStackPtr(Module &M) {
-  // The unsafe stack pointer is stored in a global variable with a magic name.
-  const char *kUnsafeStackPtrVar = "__safestack_unsafe_stack_ptr";
+Constant *SafeStack::getOrCreateUnsafeStackPtr(Function &F) {
 
-  auto UnsafeStackPtr =
-      dyn_cast_or_null<GlobalVariable>(M.getNamedValue(kUnsafeStackPtrVar));
+  const TargetTransformInfo *TTI = &getAnalysis<TargetTransformInfoWrapperPass>().getTTI(F);
 
-  if (!UnsafeStackPtr) {
-    // The global variable is not defined yet, define it ourselves.
-    // We use the initial-exec TLS model because we do not support the variable
-    // living anywhere other than in the main executable.
-    UnsafeStackPtr = new GlobalVariable(
-        /*Module=*/M, /*Type=*/StackPtrTy,
-        /*isConstant=*/false, /*Linkage=*/GlobalValue::ExternalLinkage,
-        /*Initializer=*/0, /*Name=*/kUnsafeStackPtrVar,
-        /*InsertBefore=*/nullptr,
-        /*ThreadLocalMode=*/GlobalValue::InitialExecTLSModel);
+  Module &M = *F.getParent();
+
+  // Check where the unsafe stack pointer is stored on this architecture
+  unsigned AddressSpace, Offset;
+  if (TTI->getUnsafeStackPtrLocation(AddressSpace, Offset)) {
+    // The unsafe stack pointer is stored at a fixed location
+    // (usually in the thread control block)
+    Constant *OffsetVal = ConstantInt::get(Int32Ty, Offset);
+    return ConstantExpr::getIntToPtr(
+        OffsetVal, Int8Ty->getPointerTo()->getPointerTo(AddressSpace));
   } else {
-    // The variable exists, check its type and attributes.
-    if (UnsafeStackPtr->getValueType() != StackPtrTy) {
-      report_fatal_error(Twine(kUnsafeStackPtrVar) + " must have void* type");
-    }
+    // The unsafe stack pointer is stored in a global variable with a magic
+    // name.
+    const char *kUnsafeStackPtrVar = "__safestack_unsafe_stack_ptr";
 
-    if (!UnsafeStackPtr->isThreadLocal()) {
-      report_fatal_error(Twine(kUnsafeStackPtrVar) + " must be thread-local");
+    auto UnsafeStackPtr =
+        dyn_cast_or_null<GlobalVariable>(M.getNamedValue(kUnsafeStackPtrVar));
+
+    if (!UnsafeStackPtr) {
+      // The global variable is not defined yet, define it ourselves.
+      // We use the initial-exec TLS model because we do not support the
+      // variable living anywhere other than in the main executable.
+      UnsafeStackPtr = new GlobalVariable(
+          /*Module=*/M, /*Type=*/StackPtrTy,
+          /*isConstant=*/false, /*Linkage=*/GlobalValue::ExternalLinkage,
+          /*Initializer=*/0, /*Name=*/kUnsafeStackPtrVar,
+          /*InsertBefore=*/nullptr,
+          /*ThreadLocalMode=*/GlobalValue::InitialExecTLSModel);
+    } else {
+      // The variable exists, check its type and attributes.
+      if (UnsafeStackPtr->getValueType() != StackPtrTy) {
+        report_fatal_error(Twine(kUnsafeStackPtrVar) + " must have void* type");
+      }
+
+      if (!UnsafeStackPtr->isThreadLocal()) {
+        report_fatal_error(Twine(kUnsafeStackPtrVar) + " must be thread-local");
+      }
     }
+    return UnsafeStackPtr;
   }
-
-  return UnsafeStackPtr;
 }
 
 void SafeStack::findInsts(Function &F,
@@ -575,7 +591,7 @@ bool SafeStack::runOnFunction(Function &F) {
     ++NumUnsafeStackRestorePointsFunctions;
 
   if (!UnsafeStackPtr)
-    UnsafeStackPtr = getOrCreateUnsafeStackPtr(*F.getParent());
+    UnsafeStackPtr = getOrCreateUnsafeStackPtr(F);
 
   // The top of the unsafe stack after all unsafe static allocas are allocated.
   Value *StaticTop = moveStaticAllocasToUnsafeStack(F, StaticAllocas, Returns);

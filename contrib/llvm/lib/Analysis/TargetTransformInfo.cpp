@@ -274,6 +274,11 @@ TargetTransformInfo::getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) const {
   return TTIImpl->getCostOfKeepingLiveOverCall(Tys);
 }
 
+bool TargetTransformInfo::getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                                    unsigned &Offset) const {
+  return TTIImpl->getUnsafeStackPtrLocation(AddressSpace, Offset);
+}
+
 bool TargetTransformInfo::getTgtMemIntrinsic(IntrinsicInst *Inst,
                                              MemIntrinsicInfo &Info) const {
   return TTIImpl->getTgtMemIntrinsic(Inst, Info);

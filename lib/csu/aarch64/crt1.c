@@ -37,6 +37,7 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "crtbrand.c"
 #include "ignore_init.c"
+#include "init_safestack.c"
 
 #ifdef GCRT
 extern void _mcleanup(void);

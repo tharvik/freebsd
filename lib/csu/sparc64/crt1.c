@@ -38,6 +38,7 @@ __FBSDID("$FreeBSD$");
 #include "libc_private.h"
 #include "crtbrand.c"
 #include "ignore_init.c"
+#include "init_safestack.c"
 
 struct Struct_Obj_Entry;
 struct ps_strings;
@@ -86,6 +87,7 @@ _start(char **ap, void (*cleanup)(void), struct Struct_Obj_Entry *obj __unused,
 	else {
 		__sparc_utrap_setup();
 		_init_tls();
+		init_safestack();
 	}
 #ifdef GCRT
 	atexit(_mcleanup);

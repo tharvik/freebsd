@@ -245,6 +245,7 @@ struct pthread_attr {
 #define	THR_STACK_USER		0x100	/* 0xFF reserved for <pthread.h> */
 	int	flags;
 	void	*stackaddr_attr;
+	void	*unsafestackaddr_attr;
 	size_t	stacksize_attr;
 	size_t	guardsize_attr;
 #define pthread_attr_end_copy	cpuset
@@ -750,8 +751,8 @@ void	_thr_ref_delete_unlocked(struct pthread *, struct pthread *) __hidden;
 int	_thr_find_thread(struct pthread *, struct pthread *, int) __hidden;
 void	_thr_rtld_init(void) __hidden;
 void	_thr_rtld_postfork_child(void) __hidden;
-int	_thr_stack_alloc(struct pthread_attr *) __hidden;
-void	_thr_stack_free(struct pthread_attr *) __hidden;
+void	*_thr_stack_alloc(size_t, size_t) __hidden;
+void	_thr_stack_free(void *, size_t, size_t) __hidden;
 void	_thr_free(struct pthread *, struct pthread *) __hidden;
 void	_thr_gc(struct pthread *) __hidden;
 void    _thread_cleanupspecific(void) __hidden;

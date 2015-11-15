@@ -42,6 +42,7 @@
 #include <sys/uio.h>
 #include <sys/utsname.h>
 #include <sys/ktrace.h>
+#include <sys/resource.h>
 
 #include <dlfcn.h>
 #include <err.h>
@@ -99,6 +100,7 @@ static int load_needed_objects(Obj_Entry *, int);
 static int load_preload_objects(void);
 static Obj_Entry *load_object(const char *, int fd, const Obj_Entry *, int);
 static void map_stacks_exec(RtldLockState *);
+static int init_safestack(RtldLockState *);
 static Obj_Entry *obj_from_addr(const void *);
 static void objlist_call_fini(Objlist *, Obj_Entry *, RtldLockState *);
 static void objlist_call_init(Objlist *, RtldLockState *);
@@ -228,6 +230,8 @@ long __stack_chk_guard[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 
 static int stack_prot = PROT_READ | PROT_WRITE | RTLD_DEFAULT_STACK_EXEC;
 static int max_stack_flags;
+
+static bool safestack_needed = 0;
 
 /*
  * Global declarations normally provided by crt1.  The dynamic linker is
@@ -481,7 +485,6 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	close(fd);
 	if (obj_main == NULL)
 	    rtld_die();
-	max_stack_flags = obj->stack_flags;
     } else {				/* Main program already loaded. */
 	const Elf_Phdr *phdr;
 	int phnum;
@@ -499,6 +502,9 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
 	if ((obj_main = digest_phdr(phdr, phnum, entry, argv0)) == NULL)
 	    rtld_die();
     }
+
+    max_stack_flags = obj_main->stack_flags;
+    safestack_needed = obj_main->safestack;
 
     if (aux_info[AT_EXECPATH] != 0) {
 	    char *kexecpath;
@@ -632,6 +638,15 @@ _rtld(Elf_Addr *sp, func_ptr_type *exit_proc, Obj_Entry **objp)
      */
     dbg("initializing initial thread local storage");
     allocate_initial_tls(obj_list);
+
+    /* Initialize safestack, if required */
+    if (safestack_needed) {
+	dbg("initializing safestack");
+	if (!init_safestack(NULL)) {
+	    _rtld_error("Cannot initialize safestack");
+	    rtld_die();
+	}
+    }
 
     dbg("initializing key program variables");
     set_program_var("__progname", argv[0] != NULL ? basename(argv[0]) : "");
@@ -1359,13 +1374,21 @@ digest_notes(Obj_Entry *obj, Elf_Addr note_start, Elf_Addr note_end)
 	    note = (const Elf_Note *)((const char *)(note + 1) +
 	      roundup2(note->n_namesz, sizeof(Elf32_Addr)) +
 	      roundup2(note->n_descsz, sizeof(Elf32_Addr)))) {
+		note_name = (const char *)(note + 1);
+		if (note->n_namesz == sizeof(NOTE_SAFESTACK_NAME) &&
+		    strncmp(NOTE_SAFESTACK_NAME, note_name,
+		    sizeof(NOTE_SAFESTACK_NAME)) == 0) {
+			obj->safestack = true;
+			dbg("note safestack");
+			continue;
+		}
+
 		if (note->n_namesz != sizeof(NOTE_FREEBSD_VENDOR) ||
 		    note->n_descsz != sizeof(int32_t))
 			continue;
 		if (note->n_type != ABI_NOTETYPE &&
 		    note->n_type != CRT_NOINIT_NOTETYPE)
 			continue;
-		note_name = (const char *)(note + 1);
 		if (strncmp(NOTE_FREEBSD_VENDOR, note_name,
 		    sizeof(NOTE_FREEBSD_VENDOR)) != 0)
 			continue;
@@ -2275,6 +2298,7 @@ do_load_object(int fd, const char *name, char *path, struct stat *sbp,
     obj_loads++;
     linkmap_add(obj);	/* for GDB & dlinfo() */
     max_stack_flags |= obj->stack_flags;
+    safestack_needed |= obj->safestack;
 
     dbg("  %p .. %p: %s", obj->mapbase,
          obj->mapbase + obj->mapsize - 1, obj->path);
@@ -3066,10 +3090,26 @@ dlopen_object(const char *name, int fd, Obj_Entry *refobj, int lo_flags,
 		 * Our object is found by the global object list and
 		 * will be ordered among all init calls done right
 		 * before transferring control to main.
+		 *
+		 * Similarly, do not allocate the safestack just yet,
+		 * it will be allocated before init calls.
 		 */
 	    } else {
+		/* Check safestack needs to be enabled. */
+		if (safestack_needed) {
+		    dbg("initializing safestack for \"%s\"", obj->path);
+		    if (!init_safestack(lockstate)) {
+			safestack_needed = 0;
+			dbg("cannot initialize safestack for \"%s\"", obj->path);
+			_rtld_error("Cannot initialize safestack for %s", obj->path);
+			dlopen_cleanup(obj);
+			obj = NULL;
+		    }
+		}
+
 		/* Make list of init functions to call. */
-		initlist_add_objects(obj, &obj->next, &initlist);
+		if (obj != NULL)
+		    initlist_add_objects(obj, &obj->next, &initlist);
 	    }
 	    /*
 	     * Process all no_delete or global objects here, given
@@ -3717,6 +3757,7 @@ get_program_var_addr(const char *name, RtldLockState *lockstate)
 {
     SymLook req;
     DoneList donelist;
+    tls_index ti;
 
     symlook_init(&req, name);
     req.lockstate = lockstate;
@@ -3728,7 +3769,11 @@ get_program_var_addr(const char *name, RtldLockState *lockstate)
 	  req.defobj_out));
     else if (ELF_ST_TYPE(req.sym_out->st_info) == STT_GNU_IFUNC)
 	return ((const void **)rtld_resolve_ifunc(req.defobj_out, req.sym_out));
-    else
+    else if (ELF_ST_TYPE(req.sym_out->st_info) == STT_TLS) {
+	ti.ti_module = req.defobj_out->tlsindex;
+	ti.ti_offset = req.sym_out->st_value;
+	return __tls_get_addr(&ti);
+    } else
 	return ((const void **)(req.defobj_out->relocbase +
 	  req.sym_out->st_value));
 }
@@ -4972,6 +5017,36 @@ map_stacks_exec(RtldLockState *lockstate)
 		stack_prot |= PROT_EXEC;
 		thr_map_stacks_exec();
 	}
+}
+
+static int
+init_safestack(RtldLockState *lockstate)
+{
+	int (*__safestack_init)(void);
+	int result;
+
+	__safestack_init = (int (*)(void))(uintptr_t)
+	    get_program_var_addr("__safestack_init", lockstate);
+
+	if (!__safestack_init) {
+		dbg("Cannot find __safestack_init symbol!\n");
+		return 0;
+	}
+
+	/*
+	 * Race: other thread might try to use this object before current
+	 * one completes the initilization. Not much can be done here
+	 * without better locking (same as in objlist_call_init).
+	 */
+	if (lockstate)
+		lock_release(rtld_bind_lock, lockstate);
+
+	result = __safestack_init();
+
+	if (lockstate)
+		wlock_acquire(rtld_bind_lock, lockstate);
+
+	return result;
 }
 
 void
