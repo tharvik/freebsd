@@ -204,7 +204,7 @@ extern "C" __attribute__((visibility("default")))
 // On ELF platforms, the constructor is invoked using .preinit_array (see below)
 __attribute__((constructor(0)))
 #endif
-void __safestack_init() {
+void __safestack_array_init() {
   // Determine the stack size for the main thread.
   size_t size = kDefaultUnsafeStackSize;
   size_t guard = 4096;
@@ -231,7 +231,7 @@ void __safestack_init() {
 // initialization early.
 extern "C" {
 __attribute__((section(".preinit_array"),
-               used)) void (*__safestack_preinit)(void) = __safestack_init;
+               used)) void (*__safestack_preinit)(void) = __safestack_array_init;
 }
 #endif
 
