@@ -7346,6 +7346,11 @@ void freebsd::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       crtbegin = "crtbegin.o";
 
     CmdArgs.push_back(Args.MakeArgString(ToolChain.GetFilePath(crtbegin)));
+
+    const SanitizerArgs &SanArgs = ToolChain.getSanitizerArgs();
+    if (SanArgs.needsSafeStackRt())
+      CmdArgs.push_back(
+        Args.MakeArgString(ToolChain.GetFilePath("safestack_tag.o")));
   }
 
   Args.AddAllArgs(CmdArgs, options::OPT_L);

@@ -188,6 +188,8 @@ CWARNFLAGS:=	${.IMPSRC:Ngdtoa_*.c:C/^.+$/${CWARNFLAGS}/:C/^$/-w/}
 # -fstack-protector-all because it breaks rtld.  We may want to make a librtld
 # in the future to circumvent this.
 SSP_CFLAGS:=	${SSP_CFLAGS:S/^-fstack-protector-all$/-fstack-protector/}
+# XXX For now, we don't allow safe-stack either, as it breaks rtld.
+SSP_CFLAGS:=	${SSP_CFLAGS:S/^-fsafe-stack$//}
 # Disable stack protection for SSP symbols.
 SSP_CFLAGS:=	${.IMPSRC:N*/stack_protector.c:C/^.+$/${SSP_CFLAGS}/}
 # Generate stack unwinding tables for cancellation points

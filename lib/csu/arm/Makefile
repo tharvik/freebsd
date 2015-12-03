@@ -8,6 +8,9 @@ OBJS+=		Scrt1.o gcrt1.o
 CFLAGS+=	-I${.CURDIR}/../common \
 		-I${.CURDIR}/../../libc/include
 
+SRCS+=		${.CURDIR}/../common/safestack_tag.c
+OBJS+=		safestack_tag.o
+
 FILES=		${OBJS}
 FILESMODE=	${LIBMODE}
 FILESOWN=	${LIBOWN}
@@ -17,7 +20,7 @@ FILESDIR=	${LIBDIR}
 .undef LIBRARIES_ONLY
 
 CLEANFILES=	${OBJS}
-CLEANFILES+=	crt1.s gcrt1.s Scrt1.s
+CLEANFILES+=	crt1.s gcrt1.s Scrt1.s safestack_tag.s
 
 # See the comment in lib/csu/common/crtbrand.c for the reason crt1.c is not
 # directly compiled to .o files.
@@ -42,5 +45,12 @@ Scrt1.s: crt1.c
 
 Scrt1.o: Scrt1.s
 	${CC} ${ACFLAGS} -c -o ${.TARGET} Scrt1.s
+
+safestack_tag.s: ${.CURDIR}/../common/safestack_tag.c
+	${CC} ${CFLAGS} -S -o ${.TARGET} ${.CURDIR}/../common/safestack_tag.c
+	sed ${SED_FIX_NOTE} ${.TARGET}
+
+safestack_tag.o: safestack_tag.s
+	${CC} ${ACFLAGS} -c -o ${.TARGET} safestack_tag.s
 
 .include <bsd.lib.mk>

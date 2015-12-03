@@ -71,6 +71,7 @@ __DEFAULT_NO_OPTIONS = \
     FAST_DEPEND \
     CTF \
     INSTALL_AS_USER \
+    SAFESTACK \
     STALE_STAGED
 
 # meta mode related
@@ -102,6 +103,14 @@ MK_${var}:=no
 
 .if ${MK_STAGING} == "no"
 MK_STALE_STAGED= no
+.endif
+
+#
+# Check dependencies of some options
+#
+
+.if ${MK_SAFESTACK} != "no" && ${MK_SSP} == "no"
+.error SAFESTACK option requires SSP to be enabled as well
 .endif
 
 .include <bsd.cpu.mk>

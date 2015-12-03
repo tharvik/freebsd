@@ -1,5 +1,5 @@
 /*-
- * Copyright 2012 Konstantin Belousov <kib@FreeBSD.org>
+ * Copyright 2015 Volodymyr Kuznetsov <ks.vladimir@gmail.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -21,22 +21,28 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
  */
 
-#ifndef	CSU_COMMON_NOTES_H
-#define	CSU_COMMON_NOTES_H
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
-#define NOTE_FREEBSD_VENDOR	"FreeBSD"
+#include <sys/param.h>
+#include "notes.h"
 
-#define NOTE_SECTION		".note.tag"
-
-#define ABI_NOTETYPE		1
-#define	CRT_NOINIT_NOTETYPE	2
-#define	ARCH_NOTETYPE		3
-
-#define NOTE_SAFESTACK_VENDOR	"safestack"
-#define SAFESTACK_NOTETYPE      1
-
-#endif
+/*
+ * Special ".note" entry specifying the SafeStack requirement. See the comment
+ * in lib/csu/common/crtbrand.c for more information about ELF notes.
+ */
+static const struct {
+	int32_t	namesz;
+	int32_t	descsz;
+	int32_t	type;
+	char	name[sizeof(NOTE_SAFESTACK_VENDOR)];
+	int32_t	desc;
+} safestack_tag __attribute__ ((section (NOTE_SECTION), aligned(4))) __used = {
+	.namesz = sizeof(NOTE_SAFESTACK_VENDOR),
+	.descsz = sizeof(int32_t),
+	.type = 1,
+	.name = NOTE_SAFESTACK_VENDOR,
+	.desc = 0
+};
