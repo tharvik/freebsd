@@ -36,6 +36,38 @@ extern int __safestack_enabled;
 /* Initialize safestack. Return 1 on success, 0 on error */
 int __safestack_init(void);
 
+#if defined(__i386__)
+
+#define SAFESTACK_USE_TCB 1
+#define SAFESTACK_TCB_OFFSET 0x0c
+
+static inline void *__get_unsafe_stack_ptr() {
+	void *ptr;
+	asm ("movl %%gs:0x0c, %q0" : "=r" (ptr));
+	return ptr;
+}
+
+static inline void __set_unsafe_stack_ptr(void* ptr) {
+	asm volatile ("movl %q0, %%gs:0x0c" : : "r" (ptr));
+}
+
+#elif defined(__amd64__)
+
+#define SAFESTACK_USE_TCB 1
+#define SAFESTACK_TCB_OFFSET 0x18
+
+static inline void *__get_unsafe_stack_ptr() {
+	void *ptr;
+	asm ("movq %%fs:0x18, %q0" : "=r" (ptr));
+	return ptr;
+}
+
+static inline void __set_unsafe_stack_ptr(void* ptr) {
+	asm volatile ("movq %q0, %%fs:0x18" : : "nr" (ptr));
+}
+
+#else
+
 extern __thread void* __safestack_unsafe_stack_ptr;
 
 static inline void *__get_unsafe_stack_ptr() {
@@ -45,5 +77,7 @@ static inline void *__get_unsafe_stack_ptr() {
 static inline void __set_unsafe_stack_ptr(void* ptr) {
 	__safestack_unsafe_stack_ptr = ptr;
 }
+
+#endif
 
 #endif // _SAFESTACK_H_

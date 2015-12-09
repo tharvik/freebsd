@@ -506,6 +506,12 @@ public:
   /// any callee-saved registers, so would require a spill and fill.
   unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) const;
 
+  /// \returns True if the target stores the unsafe stack pointer for the safe
+  /// stack instrumentation at a fixed offset in some non-standard address
+  /// space, and populates the address space and offset as appropriate.
+  bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const;
+
   /// \returns True if the intrinsic is a supported memory intrinsic.  Info
   /// will contain additional information - whether the intrinsic may write
   /// or read to memory, volatility and the pointer.  Info is undefined
@@ -620,6 +626,8 @@ public:
   virtual unsigned getNumberOfParts(Type *Tp) = 0;
   virtual unsigned getAddressComputationCost(Type *Ty, bool IsComplex) = 0;
   virtual unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) = 0;
+  virtual bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                         unsigned &Offset) const;
   virtual bool getTgtMemIntrinsic(IntrinsicInst *Inst,
                                   MemIntrinsicInfo &Info) = 0;
   virtual Value *getOrCreateResultFromMemIntrinsic(IntrinsicInst *Inst,
@@ -806,6 +814,10 @@ public:
   }
   unsigned getCostOfKeepingLiveOverCall(ArrayRef<Type *> Tys) override {
     return Impl.getCostOfKeepingLiveOverCall(Tys);
+  }
+  bool getUnsafeStackPtrLocation(unsigned &AddressSpace,
+                                 unsigned &Offset) const override {
+    return Impl.getUnsafeStackPtrLocation(AddressSpace, Offset);
   }
   bool getTgtMemIntrinsic(IntrinsicInst *Inst,
                           MemIntrinsicInfo &Info) override {
